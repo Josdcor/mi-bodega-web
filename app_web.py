@@ -10,7 +10,7 @@ st.set_page_config(page_title="Mi Bodega Pro - Gestión Total", layout="wide", p
 
 def conectar_db():
     conn = sqlite3.connect("bodega.db", check_same_thread=False)
-    # Crear tablas si no existen
+    # Crear tablas si no existen (Aseguramos que todas las tablas estén presentes)
     conn.execute('''CREATE TABLE IF NOT EXISTS productos 
                     (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT, precio REAL, stock_actual INTEGER, stock_minimo INTEGER)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS movimientos 
@@ -25,7 +25,7 @@ def obtener_tasa_bcv():
         response = requests.get("https://ve.dolarapi.com/v1/dolares/oficial")
         return float(response.json()['promedio'])
     except:
-        return 43.50 # Ajusta según la tasa actual en Venezuela
+        return 43.50 
 
 tasa = obtener_tasa_bcv()
 conn = conectar_db()
@@ -59,7 +59,6 @@ else:
     # --- DASHBOARD ---
     if menu == "Dashboard":
         st.title("📊 Resumen del Negocio")
-        
         df_cap = pd.read_sql_query("SELECT SUM(precio * stock_actual) as cap FROM productos", conn)
         total_cap = df_cap['cap'].iloc[0] or 0
         df_gas = pd.read_sql_query("SELECT SUM(monto) as total FROM gastos", conn)
@@ -70,51 +69,75 @@ else:
         c2.metric("Gastos Totales", f"${total_gas:,.2f}", delta=f"-{total_gas}", delta_color="inverse")
         c3.metric("Neto Disponible", f"${(total_cap - total_gas):,.2f}")
 
-        # Botón WhatsApp
         st.divider()
-        reporte_txt = f"*REPORTE BODEGA*\nCapital: ${total_cap}\nGastos: ${total_gas}\nNeto: ${total_cap-total_gas}\nTasa: {tasa} Bs."
+        reporte_txt = f"*REPORTE BODEGA*\nCapital: ${total_cap:,.2f}\nGastos: ${total_gas:,.2f}\nNeto: ${(total_cap-total_gas):,.2f}\nTasa: {tasa} Bs."
         url_wa = f"https://wa.me/?text={urllib.parse.quote(reporte_txt)}"
-        st.markdown(f'<a href="{url_wa}" target="_blank"><button style="background:#25D366;color:white;border:none;padding:10px;border-radius:5px;">Enviar Reporte WhatsApp 🟢</button></a>', unsafe_allow_html=True)
+        st.markdown(f'<a href="{url_wa}" target="_blank"><button style="background:#25D366;color:white;border:none;padding:10px;border-radius:5px;cursor:pointer;">Enviar Reporte WhatsApp 🟢</button></a>', unsafe_allow_html=True)
 
-    # --- INVENTARIO ---
+    # --- INVENTARIO (CON FUNCIÓN DE BORRAR) ---
     elif menu == "Inventario":
-        st.title("📦 Inventario")
-        df_inv = pd.read_sql_query("SELECT * FROM productos", conn)
+        st.title("📦 Inventario de Productos")
+        df_inv = pd.read_sql_query("SELECT id, nombre, precio, stock_actual, stock_minimo FROM productos", conn)
+        
         def color_stock(row):
             return ['background-color: #4a1a1a' if row.stock_actual <= row.stock_minimo else '' for _ in row.index]
+        
         st.dataframe(df_inv.style.apply(color_stock, axis=1), use_container_width=True)
         
-        with st.expander("Registrar Salida"):
-            id_p = st.number_input("ID Producto", min_value=1)
-            cant = st.number_input("Cantidad", min_value=1)
-            if st.button("Confirmar"):
+        col_acc1, col_acc2 = st.columns(2)
+        
+        with col_acc1:
+            st.subheader("🛒 Salida de Mercancía")
+            id_p = st.number_input("ID Producto para Venta", min_value=1, step=1)
+            cant = st.number_input("Cantidad", min_value=1, step=1)
+            if st.button("Confirmar Salida"):
                 conn.execute("UPDATE productos SET stock_actual = stock_actual - ? WHERE id=?", (cant, id_p))
                 conn.execute("INSERT INTO movimientos (producto_id, tipo, cantidad, fecha, responsable) VALUES (?, 'Salida', ?, ?, ?)",
                             (id_p, cant, datetime.now().strftime("%Y-%m-%d %H:%M"), st.session_state['usuario_nombre']))
                 conn.commit()
+                st.success("Venta registrada")
                 st.rerun()
+
+        # SECCIÓN DE BORRADO - SOLO VISIBLE PARA MASTER
+        if st.session_state['rol'] == "SuperAdmin":
+            with col_acc2:
+                st.subheader("🗑️ Eliminar Producto (Solo Master)")
+                id_borrar = st.number_input("ID Producto a ELIMINAR", min_value=1, step=1)
+                confirmar = st.checkbox("Confirmo que deseo borrar este producto permanentemente")
+                if st.button("❌ Eliminar del Sistema"):
+                    if confirmar:
+                        conn.execute("DELETE FROM productos WHERE id=?", (id_borrar,))
+                        conn.commit()
+                        st.success(f"Producto con ID {id_borrar} eliminado correctamente.")
+                        st.rerun()
+                    else:
+                        st.warning("Debes marcar la casilla de confirmación para borrar.")
 
     # --- GASTOS ---
     elif menu == "Gastos 💸":
         st.title("💸 Registro de Gastos")
-        with st.form("g"):
-            d = st.text_input("Descripción")
-            m = st.number_input("Monto $", min_value=0.0)
-            if st.form_submit_button("Guardar"):
-                conn.execute("INSERT INTO gastos (descripcion, monto, fecha) VALUES (?, ?, ?)", (d, m, datetime.now().strftime("%Y-%m-%d")))
+        with st.form("form_gastos"):
+            d = st.text_input("Descripción del Gasto")
+            m = st.number_input("Monto en $", min_value=0.0)
+            if st.form_submit_button("Guardar Gasto"):
+                conn.execute("INSERT INTO gastos (descripcion, monto, fecha) VALUES (?, ?, ?)", 
+                            (d, m, datetime.now().strftime("%Y-%m-%d")))
                 conn.commit()
+                st.success("Gasto guardado")
                 st.rerun()
-        st.table(pd.read_sql_query("SELECT * FROM gastos ORDER BY id DESC LIMIT 10", conn))
+        st.subheader("Gastos Recientes")
+        st.table(pd.read_sql_query("SELECT fecha, descripcion, monto FROM gastos ORDER BY id DESC LIMIT 10", conn))
 
     # --- HISTORIAL ---
     elif menu == "Historial":
-        st.title("📜 Historial")
-        df_h = pd.read_sql_query('''SELECT m.id, m.fecha, p.nombre, m.tipo, m.cantidad, m.responsable 
+        st.title("📜 Historial de Movimientos")
+        df_h = pd.read_sql_query('''SELECT m.id, m.fecha, p.nombre as producto, m.tipo, m.cantidad, m.responsable 
                                     FROM movimientos m JOIN productos p ON m.producto_id = p.id ORDER BY m.id DESC''', conn)
         st.dataframe(df_h, use_container_width=True)
         
         if st.session_state['rol'] == "SuperAdmin":
-            if st.button("🚨 VACIAR HISTORIAL"):
+            st.divider()
+            if st.button("🚨 VACIAR TODO EL HISTORIAL"):
                 conn.execute("DELETE FROM movimientos")
                 conn.commit()
                 st.rerun()
