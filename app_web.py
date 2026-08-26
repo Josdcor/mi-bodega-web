@@ -3,7 +3,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, date
 
-# Intento de importación del módulo personalizado de calculadora si existe en tu proyecto
+# Intento de importación del módulo personalizado de calculadora si existe en el proyecto
 try:
     import calculadora
 except ImportError:
@@ -81,40 +81,96 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT UNIQUE,
-            clave TEXT,
-            rol TEXT
+            nombre TEXT UNIQUE NOT NULL,
+            clave TEXT NOT NULL,
+            rol TEXT NOT NULL
         )
     """)
+    
+    # Crear usuario administrador por defecto si la tabla está vacía
+    cursor.execute("SELECT COUNT(*) FROM usuarios")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO usuarios (nombre, clave, rol) VALUES (?, ?, ?)", ("admin", "1234", "SuperAdmin"))
+        
     conn.commit()
 
 init_db()
 
-# --- ESTADO DE SESIÓN ---
+# --- ESTADO DE SESIÓN (LOGIN Y AUTENTICACIÓN) ---
+if "autenticado" not in st.session_state:
+    st.session_state["autenticado"] = False
 if "usuario_actual" not in st.session_state:
-    st.session_state["usuario_actual"] = "Admin"
+    st.session_state["usuario_actual"] = ""
 if "rol_actual" not in st.session_state:
-    st.session_state["rol_actual"] = "SuperAdmin"
+    st.session_state["rol_actual"] = ""
 
+# --- PANTALLA DE INICIO DE SESIÓN ---
+if not st.session_state["autenticado"]:
+    st.title("🏪 Mi Bodega Pro")
+    st.subheader("🔑 Iniciar Sesión")
+    
+    col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
+    with col_l2:
+        with st.form("form_login"):
+            usr_input = st.text_input("Usuario")
+            pwd_input = st.text_input("Contraseña", type="password")
+            btn_login = st.form_submit_button("🔓 Ingresar", use_container_width=True)
+            
+            if btn_login:
+                cursor = conn.cursor()
+                cursor.execute("SELECT nombre, rol FROM usuarios WHERE nombre = ? AND clave = ?", (usr_input.strip(), pwd_input.strip()))
+                user_record = cursor.fetchone()
+                
+                if user_record:
+                    st.session_state["autenticado"] = True
+                    st.session_state["usuario_actual"] = user_record[0]
+                    st.session_state["rol_actual"] = user_record[1]
+                    st.success(f"Bienvenido {user_record[0]} ({user_record[1]})")
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
+    st.stop()  # Detiene la ejecución del resto del script hasta autenticarse
+
+# --- DATOS DE SESIÓN Y SIDEBAR ---
 usuario_actual = st.session_state["usuario_actual"]
+rol_actual = st.session_state["rol_actual"]
 
-# --- BARRA LATERAL ---
 st.sidebar.title("🏪 Mi Bodega Pro")
+st.sidebar.caption(f"👤 Usuario: **{usuario_actual}** ({rol_actual})")
+
+if st.sidebar.button("🚪 Cerrar Sesión"):
+    st.session_state["autenticado"] = False
+    st.session_state["usuario_actual"] = ""
+    st.session_state["rol_actual"] = ""
+    st.rerun()
+
+st.sidebar.divider()
 tasa = st.sidebar.number_input("Tasa de Cambio (Bs./$):", min_value=1.0, value=36.5, step=0.1)
 
-menu_opciones = [
-    "🛒 Nueva Venta",
-    "📦 Inventario / Productos",
-    "👥 Clientes",
-    "💰 Abonos",
-    "🔒 Cierre de Caja",
-    "🚫 Anulación de Ventas",
-    "📊 Dashboard",
-    "🧮 Calculadora",
-    "💸 Gastos / Caja Chica",
-    "📜 Historial y Transacciones",
-    "👥 Gestión de Usuarios"
-]
+# Opciones del menú según el rol
+if rol_actual == "SuperAdmin":
+    menu_opciones = [
+        "🛒 Nueva Venta",
+        "📦 Inventario / Productos",
+        "👥 Clientes",
+        "💰 Abonos",
+        "🔒 Cierre de Caja",
+        "🚫 Anulación de Ventas",
+        "📊 Dashboard",
+        "🧮 Calculadora",
+        "💸 Gastos / Caja Chica",
+        "📜 Historial y Transacciones",
+        "⚙️ Gestión de Usuarios"
+    ]
+else:  # Rol Vendedor
+    menu_opciones = [
+        "🛒 Nueva Venta",
+        "📦 Inventario / Productos",
+        "👥 Clientes",
+        "💰 Abonos",
+        "🧮 Calculadora",
+        "💸 Gastos / Caja Chica"
+    ]
 
 menu = st.sidebar.selectbox("Menú Principal", menu_opciones)
 
@@ -486,10 +542,10 @@ elif menu == "📜 Historial y Transacciones":
         st.dataframe(df_hm, use_container_width=True)
 
 # =========================================================
-# 11. GESTIÓN DE USUARIOS (Solo Admin / Master)
+# 11. GESTIÓN DE USUARIOS (Solo SuperAdmin)
 # =========================================================
-elif menu == "👥 Gestión de Usuarios":
-    st.title("⚙️ Gestión de Usuarios")
+elif menu == "⚙️ Gestión de Usuarios":
+    st.title("⚙️ Gestión de Usuarios del Sistema")
     
     tab_crear, tab_modificar, tab_listar = st.tabs([
         "➕ Crear Usuario", 
@@ -497,6 +553,7 @@ elif menu == "👥 Gestión de Usuarios":
         "📋 Lista de Usuarios"
     ])
 
+    # --- CREAR USUARIO ---
     with tab_crear:
         with st.form("form_crear_usuario", clear_on_submit=True):
             u_nom = st.text_input("Nombre de Usuario")
@@ -522,6 +579,7 @@ elif menu == "👥 Gestión de Usuarios":
                 else:
                     st.warning("Por favor completa tanto el usuario como la contraseña.")
 
+    # --- MODIFICAR USUARIO / CAMBIAR CLAVE ---
     with tab_modificar:
         try:
             cursor = conn.cursor()
@@ -561,6 +619,7 @@ elif menu == "👥 Gestión de Usuarios":
         except Exception as e:
             st.error(f"Error al cargar la lista de usuarios: {e}")
 
+    # --- LISTAR USUARIOS ---
     with tab_listar:
         try:
             cursor = conn.cursor()
