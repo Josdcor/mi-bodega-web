@@ -14,7 +14,12 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 # ✅ Pon esto:
 conn = sqlite3.connect("bodega_v2.db", check_same_thread=False)
-
+# --- PARCHE DE AUTOCORRECCIÓN DE COLUMNA ---
+try:
+    conn.execute("ALTER TABLE productos ADD COLUMN precio_venta REAL DEFAULT 0.0")
+    conn.commit()
+except:
+    pass
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Importación de módulo local de calculadora si existe
