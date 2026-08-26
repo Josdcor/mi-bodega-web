@@ -9,6 +9,34 @@ import os
 import sqlite3
 import pandas as pd
 import streamlit as st
+import os
+import sqlite3
+import pandas as pd
+import streamlit as st
+
+# Ruta a la base de datos en el mismo directorio del script
+DB_PATH = os.path.join(os.path.dirname(__file__), "bodega.db")
+
+def obtener_conexion():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    cursor = conn.cursor()
+    
+    # Crear la tabla productos con todos sus campos necesarios
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS productos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT,
+            nombre TEXT NOT NULL,
+            precio_usd REAL DEFAULT 0,
+            stock_actual INTEGER DEFAULT 0,
+            stock_minimo INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    return conn
+
+# Inicializar la conexión global
+conn = obtener_conexion()
 
 # 1. Definir la ruta dinámica a la base de datos
 DB_PATH = os.path.join(os.path.dirname(__file__), "bodega.db")
