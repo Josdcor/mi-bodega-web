@@ -3,6 +3,12 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, date
 
+# Intento de importación del módulo personalizado de calculadora si existe en tu proyecto
+try:
+    import calculadora
+except ImportError:
+    calculadora = None
+
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Mi Bodega Pro", page_icon="🏪", layout="wide")
 
@@ -84,7 +90,7 @@ def init_db():
 
 init_db()
 
-# --- ESTADO DE SESIÓN Y NAVEGACIÓN ---
+# --- ESTADO DE SESIÓN ---
 if "usuario_actual" not in st.session_state:
     st.session_state["usuario_actual"] = "Admin"
 if "rol_actual" not in st.session_state:
@@ -92,6 +98,7 @@ if "rol_actual" not in st.session_state:
 
 usuario_actual = st.session_state["usuario_actual"]
 
+# --- BARRA LATERAL ---
 st.sidebar.title("🏪 Mi Bodega Pro")
 tasa = st.sidebar.number_input("Tasa de Cambio (Bs./$):", min_value=1.0, value=36.5, step=0.1)
 
@@ -106,7 +113,7 @@ menu_opciones = [
     "🧮 Calculadora",
     "💸 Gastos / Caja Chica",
     "📜 Historial y Transacciones",
-    "⚙️ Gestión de Usuarios"
+    "👥 Gestión de Usuarios"
 ]
 
 menu = st.sidebar.selectbox("Menú Principal", menu_opciones)
@@ -188,8 +195,11 @@ elif menu == "📦 Inventario / Productos":
 
     st.subheader("Inventario Actual")
     df_prods = pd.read_sql_query("SELECT id, nombre, precio_usd, stock_actual FROM productos", conn)
-    df_prods['precio_bs'] = df_prods['precio_usd'] * tasa
-    st.dataframe(df_prods, use_container_width=True)
+    if not df_prods.empty:
+        df_prods['precio_bs'] = df_prods['precio_usd'] * tasa
+        st.dataframe(df_prods, use_container_width=True)
+    else:
+        st.info("No hay productos en el inventario.")
 
 # =========================================================
 # 3. CLIENTES
@@ -240,7 +250,9 @@ elif menu == "💰 Abonos":
                 with col_a1:
                     moneda_abono = st.selectbox("Moneda recibida:", ["USD ($)", "Bolívares (Bs.)"])
                     max_monto_sugerido = float(deuda_actual) if moneda_abono == "USD ($)" else float(deuda_actual * tasa)
-                    monto_abono = st.number_input("Monto a Abonar:", min_value=0.01, value=max_monto_sugerido)
+                    monto_abono = st.number_input("Monto a Abonar:", 
+                                                  min_value=0.01, 
+                                                  value=max_monto_sugerido)
                 with col_a2:
                     metodo_abono = st.selectbox("Método de Pago:", ["Efectivo $", "Pago Móvil / Bolívares", "Zelle", "Punto de Venta"])
                 
@@ -324,7 +336,7 @@ elif menu == "🔒 Cierre de Caja":
                 st.dataframe(df_abonos_dia, use_container_width=True)
 
 # =========================================================
-# 6. ANULACIÓN DE VENTAS
+# 6. ANULACIÓN DE VENTAS CON REINTEGRO DE STOCK
 # =========================================================
 elif menu == "🚫 Anulación de Ventas":
     st.title("🚫 Anulación de Ventas con Reintegro de Stock")
@@ -388,7 +400,7 @@ elif menu == "🚫 Anulación de Ventas":
         st.error(f"Error al consultar el historial de ventas: {e}")
 
 # =========================================================
-# 7. DASHBOARD
+# 7. DASHBOARD (Solo Admin / Master)
 # =========================================================
 elif menu == "📊 Dashboard":
     st.title("📊 Dashboard y Analíticas")
@@ -409,13 +421,17 @@ elif menu == "📊 Dashboard":
 # =========================================================
 elif menu == "🧮 Calculadora":
     st.title("🧮 Calculadora de Precios y Conversión")
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        val_usd = st.number_input("Monto en USD ($):", min_value=0.0, value=1.0, step=1.0)
-        st.write(f"Equivale a: **{val_usd * tasa:,.2f} Bs.**")
-    with col_c2:
-        val_bs = st.number_input("Monto en Bolívares (Bs.):", min_value=0.0, value=tasa, step=10.0)
-        st.write(f"Equivale a: **${val_bs / tasa:,.2f} USD**")
+    if calculadora and hasattr(calculadora, 'mostrar'):
+        calculadora.mostrar(tasa)
+    else:
+        st.subheader("Conversor Rápido de Moneda")
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            val_usd = st.number_input("Monto en USD ($):", min_value=0.0, value=1.0, step=1.0)
+            st.write(f"Equivale a: **{val_usd * tasa:,.2f} Bs.**")
+        with col_c2:
+            val_bs = st.number_input("Monto en Bolívares (Bs.):", min_value=0.0, value=tasa, step=10.0)
+            st.write(f"Equivale a: **${val_bs / tasa:,.2f} USD**")
 
 # =========================================================
 # 9. GASTOS / CAJA CHICA
@@ -470,9 +486,9 @@ elif menu == "📜 Historial y Transacciones":
         st.dataframe(df_hm, use_container_width=True)
 
 # =========================================================
-# 11. GESTIÓN DE USUARIOS
+# 11. GESTIÓN DE USUARIOS (Solo Admin / Master)
 # =========================================================
-elif menu == "⚙️ Gestión de Usuarios":
+elif menu == "👥 Gestión de Usuarios":
     st.title("⚙️ Gestión de Usuarios")
     
     tab_crear, tab_modificar, tab_listar = st.tabs([
