@@ -14,26 +14,29 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
-# Ruta a la base de datos en el mismo directorio del script
 DB_PATH = os.path.join(os.path.dirname(__file__), "bodega.db")
 
-def obtener_conexion():
+def inicializar_bd():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     cursor = conn.cursor()
     
-    # Crear la tabla productos con todos sus campos necesarios
+    # Crear la tabla con la estructura completa que usa tu app
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             codigo TEXT,
             nombre TEXT NOT NULL,
+            categoria TEXT DEFAULT 'General',
             precio_usd REAL DEFAULT 0,
+            costo_usd REAL DEFAULT 0,
             stock_actual INTEGER DEFAULT 0,
             stock_minimo INTEGER DEFAULT 0
         )
     """)
     conn.commit()
     return conn
+
+conn = inicializar_bd()
 
 # Inicializar la conexión global
 conn = obtener_conexion()
