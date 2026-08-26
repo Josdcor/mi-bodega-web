@@ -8,6 +8,40 @@ from datetime import datetime, date
 import pandas as pd
 import requests
 import streamlit as st
+import sqlite3
+import os
+import pandas as pd
+import streamlit as st
+from datetime import datetime
+
+# --- FUNCIÓN DE CONEXIÓN CORRECTA ---
+def conectar_db():
+    conn = sqlite3.connect("bodega.db", check_same_thread=False)
+    return conn
+
+conn = conectar_db()
+c = conn.cursor()
+
+# --- CREAR TABLA SI NO EXISTE ---
+c.execute('''
+    CREATE TABLE IF NOT EXISTS productos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo TEXT UNIQUE,
+        nombre TEXT,
+        costo REAL DEFAULT 0.0,
+        precio_venta REAL DEFAULT 0.0,
+        stock_actual REAL DEFAULT 0.0,
+        stock_minimo REAL DEFAULT 0.0
+    )
+''')
+conn.commit()
+
+# --- AUTOCORRECCIÓN DE COLUMNA ---
+try:
+    c.execute("ALTER TABLE productos ADD COLUMN precio_venta REAL DEFAULT 0.0")
+    conn.commit()
+except Exception:
+    pass
 
 # --- 1. CONFIGURACIÓN DE ENTORNO Y ASYNCIO ---
 if sys.platform == 'win32':
