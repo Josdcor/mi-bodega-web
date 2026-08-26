@@ -41,30 +41,27 @@ conn = inicializar_bd()
 # Inicializar la conexión global
 conn = obtener_conexion()
 
-# 1. Definir la ruta
+# 1. Definir la ruta dinámica de la base de datos
 DB_PATH = os.path.join(os.path.dirname(__file__), "bodega.db")
 
-# 2. DEFINIR LA FUNCIÓN PRIMERO
-def obtener_conexion():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS productos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT,
-            nombre TEXT NOT NULL,
-            categoria TEXT DEFAULT 'General',
-            precio_usd REAL DEFAULT 0,
-            costo_usd REAL DEFAULT 0,
-            stock_actual INTEGER DEFAULT 0,
-            stock_minimo INTEGER DEFAULT 0
-        )
-    """)
-    conn.commit()
-    return conn
+# 2. Conectar directamente (sin funciones)
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+cursor = conn.cursor()
 
-# 3. LLAMAR A LA FUNCIÓN DESPUÉS DE DEFINIRLA
-conn = obtener_conexion()
+# 3. Crear la tabla con todas las columnas necesarias si no existe
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS productos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo TEXT,
+        nombre TEXT NOT NULL,
+        categoria TEXT DEFAULT 'General',
+        precio_usd REAL DEFAULT 0,
+        costo_usd REAL DEFAULT 0,
+        stock_actual INTEGER DEFAULT 0,
+        stock_minimo INTEGER DEFAULT 0
+    )
+""")
+conn.commit()
 
 # 4. Ahora sí ejecutas la consulta de Pandas sin que falle en la línea 188
 df_bajo = pd.read_sql_query(
