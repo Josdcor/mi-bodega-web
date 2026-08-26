@@ -314,7 +314,7 @@ else:
                         st.rerun()
             st.divider()
 
-        df_p = pd.read_sql_query("SELECT id, codigo, nombre, precio, stock_actual FROM productos WHERE stock_actual > 0", conn)
+        df_p = pd.read_sql_query("SELECT id, codigo, nombre, precio_venta, stock_actual FROM productos WHERE stock_actual > 0", conn)
         
         if df_p.empty:
             st.warning("No hay productos disponibles en inventario.")
