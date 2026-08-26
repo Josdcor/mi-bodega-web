@@ -34,6 +34,37 @@ st.set_page_config(page_title="Mi Bodega Pro - Gestión Total", layout="wide", p
 def conectar_db():
     conn = sqlite3.connect("bodega.db", check_same_thread=False, timeout=10)
     cursor = conn.cursor()
+
+    # --- INICIALIZACIÓN Y MIGRACIÓN AUTOMÁTICA DE BASE DE DATOS ---
+c = conn.cursor()
+
+# 1. Crear tabla con todas las columnas necesarias si no existe
+c.execute('''
+    CREATE TABLE IF NOT EXISTS productos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo TEXT UNIQUE,
+        nombre TEXT,
+        costo REAL DEFAULT 0.0,
+        precio_venta REAL DEFAULT 0.0,
+        stock_actual REAL DEFAULT 0.0,
+        stock_minimo REAL DEFAULT 0.0
+    )
+''')
+conn.commit()
+
+# 2. Agregar la columna precio_venta si la tabla era vieja
+try:
+    c.execute("ALTER TABLE productos ADD COLUMN precio_venta REAL DEFAULT 0.0")
+    conn.commit()
+except Exception:
+    pass
+
+# 3. Copiar datos de la columna 'precio' vieja hacia 'precio_venta' si existía
+try:
+    c.execute("UPDATE productos SET precio_venta = precio WHERE precio_venta = 0 OR precio_venta IS NULL")
+    conn.commit()
+except Exception:
+    pass
     
     cursor.execute('''CREATE TABLE IF NOT EXISTS usuarios 
                     (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE, clave TEXT, rol TEXT)''')
