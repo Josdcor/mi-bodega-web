@@ -31,12 +31,32 @@ except ImportError:
 st.set_page_config(page_title="Mi Bodega Pro - Gestión Total", layout="wide", page_icon="🚀")
 
 # --- 2. CONEXIÓN Y ESTRUCTURA DE BASE DE DATOS ---
+# --- CONEXIÓN A BASE DE DATOS ---
 def conectar_db():
-    conn = sqlite3.connect("bodega.db", check_same_thread=False, timeout=10)
-    cursor = conn.cursor()
+    return sqlite3.connect("bodega.db", check_same_thread=False)
 
-    # --- INICIALIZACIÓN Y MIGRACIÓN AUTOMÁTICA DE BASE DE DATOS ---
+conn = conectar_db()
 c = conn.cursor()
+
+# --- CREACIÓN DE TABLA Y MIGRACIÓN AUTOMÁTICA ---
+c.execute('''
+    CREATE TABLE IF NOT EXISTS productos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo TEXT UNIQUE,
+        nombre TEXT,
+        costo REAL DEFAULT 0.0,
+        precio_venta REAL DEFAULT 0.0,
+        stock_actual REAL DEFAULT 0.0,
+        stock_minimo REAL DEFAULT 0.0
+    )
+''')
+conn.commit()
+
+try:
+    c.execute("ALTER TABLE productos ADD COLUMN precio_venta REAL DEFAULT 0.0")
+    conn.commit()
+except Exception:
+    pass
 
 # 1. Crear tabla con todas las columnas necesarias si no existe
 c.execute('''
