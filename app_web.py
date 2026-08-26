@@ -12,6 +12,8 @@ import streamlit as st
 # --- 1. CONFIGURACIÓN DE ENTORNO Y ASYNCIO ---
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# ✅ Pon esto:
+conn = sqlite3.connect("bodega_v2.db", check_same_thread=False)
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
