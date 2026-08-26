@@ -1,111 +1,27 @@
-import streamlit as st
+import os
 import sqlite3
 import pandas as pd
 import hashlib
 import io
 from datetime import datetime, date
+import streamlit as st
 import calculadora
-import os
-import sqlite3
-import pandas as pd
-import streamlit as st
-import os
-import sqlite3
-import pandas as pd
-import streamlit as st
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "bodega.db")
+# --- 1. CONFIGURACIÓN Y CONEXIÓN BASE DE DATOS ---
+DB_NAME = os.path.join(os.path.dirname(__file__), "bodega.db")
 
-def inicializar_bd():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    cursor = conn.cursor()
-    
-    # Crear la tabla con la estructura completa que usa tu app
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS productos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT,
-            nombre TEXT NOT NULL,
-            categoria TEXT DEFAULT 'General',
-            precio_usd REAL DEFAULT 0,
-            costo_usd REAL DEFAULT 0,
-            stock_actual INTEGER DEFAULT 0,
-            stock_minimo INTEGER DEFAULT 0
-        )
-    """)
-    conn.commit()
-    return conn
-
-conn = inicializar_bd()
-
-# Inicializar la conexión global
-conn = obtener_conexion()
-
-# 1. Definir función de conexión antes de usarla
-def obtener_conexion():
-    db_path = os.path.join(os.path.dirname(__file__), "bodega.db")
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS productos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT,
-            nombre TEXT NOT NULL,
-            categoria TEXT DEFAULT 'General',
-            precio_usd REAL DEFAULT 0,
-            costo_usd REAL DEFAULT 0,
-            stock_actual INTEGER DEFAULT 0,
-            stock_minimo INTEGER DEFAULT 0
-        )
-    """)
-    conn.commit()
-    return conn
-
-# 2. Asignar la conexión global
-conn = obtener_conexion()
-
-# 3. Crear la tabla con todas las columnas necesarias si no existe
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS productos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        codigo TEXT,
-        nombre TEXT NOT NULL,
-        categoria TEXT DEFAULT 'General',
-        precio_usd REAL DEFAULT 0,
-        costo_usd REAL DEFAULT 0,
-        stock_actual INTEGER DEFAULT 0,
-        stock_minimo INTEGER DEFAULT 0
-    )
-""")
-conn.commit()
-
-# 4. Ahora sí ejecutas la consulta de Pandas sin que falle en la línea 188
-df_bajo = pd.read_sql_query(
-    "SELECT nombre, stock_actual, stock_minimo FROM productos WHERE stock_actual <= stock_minimo",
-    conn
-)
-
-st.set_page_config(
-    page_title="Mi Bodega Pro - Sistema de Gestión", 
-    page_icon="🏪", 
-    layout="wide"
-)
-
-DB_NAME = "bodega.db"
-
-# --- FUNCIONES DE UTILIDAD Y SEGURIDAD ---
 def hash_clave(clave: str) -> str:
     """Encriptación SHA-256 para almacenamiento seguro de contraseñas."""
     return hashlib.sha256(clave.encode('utf-8')).hexdigest()
 
 def conectar_db():
     """Conexión robusta con tiempo de espera extendido y modo WAL para prevenir bloqueos."""
-    conn = sqlite3.connect(DB_NAME, timeout=30.0)
+    conn = sqlite3.connect(DB_NAME, timeout=30.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
-# --- INICIALIZACIÓN BASE DE DATOS ---
 def init_db():
+    """Crea todas las tablas e inicializa los usuarios si no existen."""
     with conectar_db() as conn:
         cursor = conn.cursor()
         
@@ -122,7 +38,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 codigo TEXT,
                 nombre TEXT NOT NULL,
-                categoria TEXT,
+                categoria TEXT DEFAULT 'General',
                 precio_usd REAL NOT NULL,
                 costo_usd REAL DEFAULT 0,
                 stock_actual REAL NOT NULL,
@@ -198,7 +114,7 @@ def init_db():
             )
         """)
         
-        # --- MIGRACIÓN AUTOMÁTICA DE COLUMNAS FALTANTES ---
+        # Migración de columnas faltantes por si la BD ya existía
         try:
             cursor.execute("ALTER TABLE ventas ADD COLUMN es_credito INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
@@ -209,7 +125,17 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
-        # Usuarios iniciales con contraseñas encriptadas SHA-256
+        try:
+            cursor.execute("ALTER TABLE productos ADD COLUMN categoria TEXT DEFAULT 'General'")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE productos ADD COLUMN costo_usd REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        # Usuarios iniciales
         cursor.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('Jose', ?, 'SuperAdmin')", (hash_clave('1234'),))
         cursor.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('admin', ?, 'Admin')", (hash_clave('admin123'),))
         
@@ -218,16 +144,23 @@ def init_db():
         
         conn.commit()
 
+# Inicializar Base de Datos al arrancar la app
 init_db()
 
-# --- CONTROL DE SESIÓN ---
+# --- 2. CONFIGURACIÓN DE PÁGINA Y SESIÓN DE STREAMLIT ---
+st.set_page_config(
+    page_title="Mi Bodega Pro - Sistema de Gestión", 
+    page_icon="🏪", 
+    layout="wide"
+)
+
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
     st.session_state.usuario = ""
     st.session_state.rol = ""
     st.session_state.alerta_stock = False
 
-# --- PANTALLA DE LOGIN (ESTILO TARJETA EXACTO) ---
+# --- 3. PANTALLA DE LOGIN ---
 if not st.session_state.autenticado:
     col_left, col_center, col_right = st.columns([1, 2, 1])
     with col_center:
@@ -261,7 +194,7 @@ if not st.session_state.autenticado:
                         st.error(f"Error en base de datos: {e}")
     st.stop()
 
-# --- NOTIFICACIÓN EMERGENTE DE STOCK CRÍTICO ---
+# --- 4. NOTIFICACIÓN EMERGENTE DE STOCK CRÍTICO ---
 if not st.session_state.alerta_stock:
     with conectar_db() as conn:
         df_bajo = pd.read_sql_query("SELECT nombre, stock_actual, stock_minimo FROM productos WHERE stock_actual <= stock_minimo", conn)
@@ -269,7 +202,7 @@ if not st.session_state.alerta_stock:
         st.toast(f"⚠️ ¡Atención! Hay {len(df_bajo)} productos con stock crítico.", icon="📦")
     st.session_state.alerta_stock = True
 
-# --- BARRA LATERAL ---
+# --- 5. BARRA LATERAL ---
 st.sidebar.markdown("## 🏪 Mi Bodega Pro")
 st.sidebar.markdown(f"👤 **Usuario:** {st.session_state.usuario} ({st.session_state.rol})")
 
@@ -319,7 +252,9 @@ opcion = st.sidebar.selectbox(
     label_visibility="collapsed"
 )
 
-# --- MÓDULO 1: NUEVA VENTA (POS / PAGOS MIXTOS / RECTIBO) ---
+# --- 6. MÓDULOS DE NAVEGACIÓN ---
+
+# MÓDULO 1: NUEVA VENTA
 if opcion == "🛒 Nueva Venta":
     st.header("🛒 Punto de Venta Directo")
     
@@ -392,7 +327,6 @@ if opcion == "🛒 Nueva Venta":
                         conn.commit()
                         st.success(f"✅ Venta procesada con éxito. Ticket: **{num_fact}**")
 
-                        # Generar recibo imprimible
                         ticket_txt = f"================================\n"
                         ticket_txt += f"        MI BODEGA PRO           \n"
                         ticket_txt += f"================================\n"
@@ -411,7 +345,7 @@ if opcion == "🛒 Nueva Venta":
                     else:
                         st.error("❌ Stock insuficiente.")
 
-# --- MÓDULO 2: INVENTARIO / PRODUCTOS ---
+# MÓDULO 2: INVENTARIO / PRODUCTOS
 elif opcion == "📦 Inventario / Productos":
     st.header("📦 Control de Inventario y Productos")
     
@@ -504,7 +438,7 @@ elif opcion == "📦 Inventario / Productos":
                     st.success("✅ Producto eliminado con éxito.")
                     st.rerun()
 
-# --- MÓDULO 3: CLIENTES Y CUENTAS POR COBRAR (FIADOS) ---
+# MÓDULO 3: CLIENTES
 elif opcion == "👥 Clientes":
     st.header("👥 Gestión de Clientes y Estado de Cuentas (Fiados)")
     tab_l, tab_r = st.tabs(["Lista de Clientes y Saldos", "Registrar Cliente"])
@@ -514,7 +448,6 @@ elif opcion == "👥 Clientes":
             df_cli = pd.read_sql_query("SELECT * FROM clientes", conn)
             
         if not df_cli.empty:
-            # Cálculo dinámico de saldos fiados
             saldos = []
             for _, cli in df_cli.iterrows():
                 with conectar_db() as conn:
@@ -543,7 +476,7 @@ elif opcion == "👥 Clientes":
                 else:
                     st.warning("Ingrese el nombre del cliente.")
 
-# --- MÓDULO 4: ABONOS ---
+# MÓDULO 4: ABONOS
 elif opcion == "💰 Abonos":
     st.header("💰 Registro de Abonos a Cuentas Fiadas")
     with conectar_db() as conn:
@@ -555,7 +488,6 @@ elif opcion == "💰 Abonos":
         cli_dict = {row['nombre']: row['id'] for _, row in clientes_df.iterrows()}
         cliente_sel = st.selectbox("Seleccionar Cliente", list(cli_dict.keys()))
         
-        # Mostrar deuda actual
         with conectar_db() as conn:
             c_id = cli_dict[cliente_sel]
             v_cred = pd.read_sql_query("SELECT SUM(total_usd) as tot FROM ventas WHERE cliente_id = ? AND es_credito = 1 AND estado = 'Completada'", conn, params=(c_id,))['tot'].fillna(0).iloc[0]
@@ -580,7 +512,7 @@ elif opcion == "💰 Abonos":
                 conn.commit()
             st.success(f"✅ Abono de ${monto_abono:.2f} guardado para {cliente_sel}.")
 
-# --- MÓDULO 5: CIERRE DE CAJA ---
+# MÓDULO 5: CIERRE DE CAJA
 elif opcion == "🔒 Cierre de Caja":
     st.header("🔒 Cierre de Caja Diario")
     
@@ -611,7 +543,7 @@ elif opcion == "🔒 Cierre de Caja":
             conn.commit()
         st.success(f"✅ Cierre diario registrado por **{st.session_state.usuario}**.")
 
-# --- MÓDULO 6: ANULACIÓN DE VENTAS ---
+# MÓDULO 6: ANULACIÓN DE VENTAS
 elif opcion == "🔴 Anulación de Ventas":
     st.header("🔴 Anulación de Ventas")
     
@@ -638,7 +570,7 @@ elif opcion == "🔴 Anulación de Ventas":
                 conn.commit()
             st.success(f"Venta {v_data['num_factura']} anulada y stock retornado al inventario.")
 
-# --- MÓDULO 7: DASHBOARD ---
+# MÓDULO 7: DASHBOARD
 elif opcion == "📊 Dashboard":
     st.header("📊 Dashboard del Negocio")
     
@@ -656,7 +588,7 @@ elif opcion == "📊 Dashboard":
         if not df_v.empty:
             st.line_chart(df_v["total_usd"])
 
-# --- MÓDULO 8: CALCULADORA ---
+# MÓDULO 8: CALCULADORA
 elif opcion == "🧮 Calculadora":
     st.header("🧮 Conversor Rápido Divisas")
     c1, c2 = st.columns(2)
@@ -669,7 +601,7 @@ elif opcion == "🧮 Calculadora":
         res_usd = calculadora.bs_a_usd(m_bs, tasa_bcv)
         st.info(f"Equivalente: **${res_usd:.2f} USD**")
 
-# --- MÓDULO 9: GASTOS / CAJA CHICA ---
+# MÓDULO 9: GASTOS / CAJA CHICA
 elif opcion == "💸 Gastos / Caja Chica":
     st.header("💸 Gastos Operativos")
     with st.form("form_gasto_cc"):
@@ -690,7 +622,7 @@ elif opcion == "💸 Gastos / Caja Chica":
     if not df_g.empty:
         st.dataframe(df_g, use_container_width=True)
 
-# --- MÓDULO 10: HISTORIAL Y TRANSACCIONES ---
+# MÓDULO 10: HISTORIAL Y TRANSACCIONES
 elif opcion == "📜 Historial y Transacciones":
     st.header("📜 Historial General de Transacciones")
     with conectar_db() as conn:
@@ -704,7 +636,7 @@ elif opcion == "📜 Historial y Transacciones":
     if not df_h.empty:
         st.dataframe(df_h, use_container_width=True)
 
-# --- MÓDULO 11: GESTIÓN DE USUARIOS ---
+# MÓDULO 11: GESTIÓN DE USUARIOS
 elif opcion == "⚙️ Gestión de Usuarios":
     st.header("⚙️ Administración de Usuarios")
     
@@ -769,7 +701,6 @@ elif opcion == "⚙️ Gestión de Usuarios":
                 usrs_df_del = pd.read_sql_query("SELECT id, nombre, rol FROM usuarios", conn)
             
             if not usrs_df_del.empty:
-                # Filtrar para evitar que el usuario activo se elimine a sí mismo
                 usrs_filtrados = usrs_df_del[usrs_df_del['nombre'] != st.session_state.usuario]
                 
                 if usrs_filtrados.empty:
