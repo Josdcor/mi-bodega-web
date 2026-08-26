@@ -5,6 +5,39 @@ import hashlib
 import io
 from datetime import datetime, date
 import calculadora
+import os
+import sqlite3
+import pandas as pd
+import streamlit as st
+
+# 1. Definir la ruta dinámica a la base de datos
+DB_PATH = os.path.join(os.path.dirname(__file__), "bodega.db")
+
+# 2. Función para conectar y crear tablas si no existen
+def inicializar_bd():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Crear la tabla productos si no existe
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS productos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            stock_actual INTEGER DEFAULT 0,
+            stock_minimo INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    return conn
+
+# 3. Llamar a la función para garantizar que la tabla exista
+conn = inicializar_bd()
+
+# 4. Ahora sí ejecutas la consulta de Pandas sin que falle en la línea 188
+df_bajo = pd.read_sql_query(
+    "SELECT nombre, stock_actual, stock_minimo FROM productos WHERE stock_actual <= stock_minimo",
+    conn
+)
 
 st.set_page_config(
     page_title="Mi Bodega Pro - Sistema de Gestión", 
