@@ -16,13 +16,10 @@ def hash_clave(clave: str) -> str:
     return hashlib.sha256(clave.encode('utf-8')).hexdigest()
 
 def conectar_db():
-    # Intenta conectar a PostgreSQL (Supabase) mediante los Secrets
     if "postgres" in st.secrets:
         return psycopg2.connect(st.secrets["postgres"]["url"])
-    # Si ejecutas de forma local sin secrets, usas SQLite como respaldo
-    else:
-        import sqlite3
-        return sqlite3.connect("bodega.db")
+    import sqlite3
+    return sqlite3.connect("bodega.db")
 
 def init_db():
     """Crea todas las tablas e inicializa los usuarios si no existen."""
