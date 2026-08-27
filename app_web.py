@@ -588,18 +588,96 @@ elif opcion == "📊 Dashboard":
         if not df_v.empty:
             st.line_chart(df_v["total_usd"])
 
-# MÓDULO 8: CALCULADORA
+# MÓDULO 8: CALCULADORA DE PRECIOS POR UNIDAD
 elif opcion == "🧮 Calculadora":
-    st.header("🧮 Conversor Rápido Divisas")
-    c1, c2 = st.columns(2)
-    with c1:
-        m_usd = st.number_input("Monto USD ($)", min_value=0.0, value=1.0, step=1.0)
-        res_bs = calculadora.usd_a_bs(m_usd, tasa_bcv)
-        st.info(f"Equivalente: **{res_bs:,.2f} Bs.**")
-    with c2:
-        m_bs = st.number_input("Monto Bolívares (Bs)", min_value=0.0, value=tasa_bcv, step=10.0)
-        res_usd = calculadora.bs_a_usd(m_bs, tasa_bcv)
-        st.info(f"Equivalente: **${res_usd:.2f} USD**")
+    st.header("🧮 Calculadora de Costos y Precio de Venta por Unidad")
+    st.caption("Determina el costo real por unidad incluyendo gastos operativos y aplicando el margen de ganancia deseado.")
+    
+    col_calc1, col_calc2 = st.columns(2)
+    
+    with col_calc1:
+        st.subheader("📦 Datos de Compra al Mayor")
+        costo_bulto_usd = st.number_input("Costo del Bulto / Saco / Caja ($)", min_value=0.01, value=18.00, step=1.0)
+        unidades_por_bulto = st.number_input("Cantidad de Unidades por Bulto", min_value=1.0, value=20.0, step=1.0)
+        gastos_adicionales_usd = st.number_input("Gastos Adicionales (Gasolina, Flete, Pasajes) ($)", min_value=0.00, value=2.00, step=0.50)
+        
+    with col_calc2:
+        st.subheader("📈 Margen de Ganancia e Impuestos")
+        
+        opcion_ganancia = st.radio("Seleccionar % de Ganancia", ["20%", "30%", "40%", "Otro %"], index=1, horizontal=True)
+        
+        if opcion_ganancia == "20%":
+            pct_ganancia = 20.0
+        elif opcion_ganancia == "30%":
+            pct_ganancia = 30.0
+        elif opcion_ganancia == "40%":
+            pct_ganancia = 40.0
+        else:
+            pct_ganancia = st.number_input("Porcentaje Personalizado (%)", min_value=0.0, value=35.0, step=1.0)
+
+        incluir_iva = st.checkbox("¿Incluir IVA / Impuesto (16%) en el costo base?")
+        pct_iva = 16.0 if incluir_iva else 0.0
+
+    st.divider()
+
+    # --- CÁLCULOS MATEMÁTICOS DE COSTO Y PRECIO ---
+    costo_total_compra = costo_bulto_usd + gastos_adicionales_usd
+    costo_base_unidad = costo_total_compra / unidades_por_bulto
+    
+    if incluir_iva:
+        costo_base_unidad += (costo_base_unidad * (pct_iva / 100.0))
+
+    # Cálculo del precio final aplicando el margen de ganancia
+    precio_venta_unidad_usd = costo_base_unidad * (1.0 + (pct_ganancia / 100.0))
+    precio_venta_unidad_bs = calculadora.usd_a_bs(precio_venta_unidad_usd, tasa_bcv)
+    ganancia_neta_unidad = precio_venta_unidad_usd - costo_base_unidad
+    ganancia_neta_bulto = ganancia_neta_unidad * unidades_por_bulto
+
+    # --- MOSTRAR RESULTADOS FORMATO DETALLADO ---
+    st.subheader("📊 Desglose de Resultados")
+    
+    res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+    res_col1.metric("Costo Real u. ($)", f"${costo_base_unidad:.2f}")
+    res_col2.metric("Precio Venta u. ($)", f"${precio_venta_unidad_usd:.2f}")
+    res_col3.metric("Precio Venta u. (Bs)", f"{precio_venta_unidad_bs:,.2f} Bs.")
+    res_col4.metric("Ganancia Total Bulto ($)", f"${ganancia_neta_bulto:.2f}")
+
+    st.info(f"💡 **Resumen del Cálculo:** Comprando el bulto a **${costo_bulto_usd:.2f}** con **${gastos_adicionales_usd:.2f}** en gastos, cada una de las **{int(unidades_por_bulto)}** unidades te cuesta **${costo_base_unidad:.2f}**. Vendiendo cada unidad a **${precio_venta_unidad_usd:.2f}** ({precio_venta_unidad_bs:,.2f} Bs.), ganas **${ganancia_neta_unidad:.2f}** por unidad ({pct_ganancia}% de margen).")
+
+    # --- REGISTRO / ACTUALIZACIÓN EN EL INVENTARIO ---
+    st.divider()
+    st.subheader("📥 Cargar Resultado Directo al Inventario")
+    
+    with st.form("form_cargar_inv"):
+        nom_prod = st.text_input("Nombre del Producto", placeholder="Ej: Arroz Primor 1Kg")
+        cod_prod = st.text_input("Código de Barras (Opcional)")
+        cat_prod = st.text_input("Categoría", value="Abarrotes")
+        stk_inicial = st.number_input("Stock a Agregar (Unidades)", min_value=1.0, value=unidades_por_bulto, step=1.0)
+        
+        if st.form_submit_button("💾 Guardar / Actualizar en Inventario", type="primary"):
+            if not nom_prod.strip():
+                st.warning("Ingrese un nombre de producto válido.")
+            else:
+                with conectar_db() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id, stock_actual FROM productos WHERE LOWER(nombre) = LOWER(?)", (nom_prod.strip(),))
+                    prod_existente = cursor.fetchone()
+                    
+                    if prod_existente:
+                        nuevo_stock = prod_existente[1] + stk_inicial
+                        cursor.execute("""
+                            UPDATE productos 
+                            SET precio_usd = ?, costo_usd = ?, stock_actual = ?
+                            WHERE id = ?
+                        """, (round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), nuevo_stock, prod_existente[0]))
+                        st.success(f"✅ Producto **{nom_prod}** actualizado. Nuevo precio: **${precio_venta_unidad_usd:.2f}**, Nuevo stock: **{nuevo_stock}** unid.")
+                    else:
+                        cursor.execute("""
+                            INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
+                            VALUES (?, ?, ?, ?, ?, ?, 5.0)
+                        """, (cod_prod.strip(), nom_prod.strip(), cat_prod.strip(), round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), stk_inicial))
+                        st.success(f"✅ Producto **{nom_prod}** creado en inventario con precio de **${precio_venta_unidad_usd:.2f}** y stock de **{stk_inicial}** unid.")
+                    conn.commit()
 
 # MÓDULO 9: GASTOS / CAJA CHICA
 elif opcion == "💸 Gastos / Caja Chica":
