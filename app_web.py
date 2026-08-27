@@ -135,13 +135,11 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
-        # Usuarios iniciales
+        # Usuarios iniciales (solo se insertan si no existen)
         cursor.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('Jose', ?, 'SuperAdmin')", (hash_clave('1234'),))
         cursor.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('admin', ?, 'Admin')", (hash_clave('admin123'),))
         
-        cursor.execute("UPDATE usuarios SET clave = ? WHERE nombre = 'Jose'", (hash_clave('1234'),))
-        cursor.execute("UPDATE usuarios SET clave = ? WHERE nombre = 'admin'", (hash_clave('admin123'),))
-        
+        # Guardar cambios en la base de datos
         conn.commit()
 
 # Inicializar Base de Datos al arrancar la app
