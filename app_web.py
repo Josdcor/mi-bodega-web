@@ -4,8 +4,9 @@ import pandas as pd
 import hashlib
 import io
 from datetime import datetime, date
-import streamlit as st
 import calculadora
+import psycopg2
+import streamlit as st
 
 # --- 1. CONFIGURACIÓN Y CONEXIÓN BASE DE DATOS ---
 DB_NAME = os.path.join(os.path.dirname(__file__), "bodega.db")
@@ -15,10 +16,13 @@ def hash_clave(clave: str) -> str:
     return hashlib.sha256(clave.encode('utf-8')).hexdigest()
 
 def conectar_db():
-    """Conexión robusta con tiempo de espera extendido y modo WAL para prevenir bloqueos."""
-    conn = sqlite3.connect(DB_NAME, timeout=30.0, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
+    # Intenta conectar a PostgreSQL (Supabase) mediante los Secrets
+    if "postgres" in st.secrets:
+        return psycopg2.connect(st.secrets["postgres"]["url"])
+    # Si ejecutas de forma local sin secrets, usas SQLite como respaldo
+    else:
+        import sqlite3
+        return sqlite3.connect("bodega.db")
 
 def init_db():
     """Crea todas las tablas e inicializa los usuarios si no existen."""
