@@ -1,147 +1,174 @@
 import os
-import sqlite3
-import pandas as pd
 import hashlib
-import io
-from datetime import datetime, date
-import calculadora
-import psycopg2
+from datetime import datetime
+import pandas as pd
 import streamlit as st
+import calculadora
 
 # --- 1. CONFIGURACIÓN Y CONEXIÓN BASE DE DATOS ---
-DB_NAME = os.path.join(os.path.dirname(__file__), "bodega.db")
+def es_postgres():
+    return "postgres" in st.secrets
+
+def conectar_db():
+    if es_postgres():
+        import psycopg2
+        return psycopg2.connect(st.secrets["postgres"]["url"])
+    import sqlite3
+    return sqlite3.connect("bodega.db")
+
+def ejecutar_sql(query: str, params: tuple = (), fetch: str = None):
+    """Función auxiliar para ejecutar SQL de forma agnóstica entre SQLite y PostgreSQL."""
+    using_pg = es_postgres()
+    if using_pg:
+        query = query.replace("?", "%s")
+    
+    conn = conectar_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        res = None
+        if fetch == "one":
+            res = cursor.fetchone()
+        elif fetch == "all":
+            res = cursor.fetchall()
+        conn.commit()
+        return res
+    finally:
+        cursor.close()
+        conn.close()
 
 def hash_clave(clave: str) -> str:
     """Encriptación SHA-256 para almacenamiento seguro de contraseñas."""
     return hashlib.sha256(clave.encode('utf-8')).hexdigest()
 
-def conectar_db():
-    if "postgres" in st.secrets:
-        return psycopg2.connect(st.secrets["postgres"]["url"])
-    import sqlite3
-    return sqlite3.connect("bodega.db")
-
 def init_db():
-    """Crea todas las tablas e inicializa los usuarios si no existen."""
-    with conectar_db() as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT UNIQUE NOT NULL,
-                clave TEXT NOT NULL,
-                rol TEXT NOT NULL
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS productos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                codigo TEXT,
-                nombre TEXT NOT NULL,
-                categoria TEXT DEFAULT 'General',
-                precio_usd REAL NOT NULL,
-                costo_usd REAL DEFAULT 0,
-                stock_actual REAL NOT NULL,
-                stock_minimo REAL DEFAULT 5
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clientes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
-                cedula TEXT,
-                telefono TEXT
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS ventas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                num_factura TEXT NOT NULL,
-                producto_id INTEGER,
-                cliente_id INTEGER,
-                cantidad REAL NOT NULL,
-                total_usd REAL NOT NULL,
-                total_bs REAL NOT NULL,
-                metodo_pago TEXT NOT NULL,
-                es_credito INTEGER DEFAULT 0,
-                fecha TEXT NOT NULL,
-                responsable TEXT NOT NULL,
-                estado TEXT DEFAULT 'Completada',
-                FOREIGN KEY(cliente_id) REFERENCES clientes(id)
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS movimientos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                producto_id INTEGER,
-                tipo TEXT NOT NULL,
-                cantidad REAL NOT NULL,
-                fecha TEXT NOT NULL,
-                responsable TEXT NOT NULL
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS gastos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                descripcion TEXT NOT NULL,
-                monto REAL NOT NULL,
-                moneda TEXT DEFAULT 'USD',
-                fecha TEXT NOT NULL,
-                responsable TEXT NOT NULL
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS abonos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                cliente_id INTEGER,
-                monto_usd REAL NOT NULL,
-                monto_bs REAL NOT NULL,
-                metodo_pago TEXT NOT NULL,
-                fecha TEXT NOT NULL,
-                responsable TEXT NOT NULL,
-                FOREIGN KEY(cliente_id) REFERENCES clientes(id)
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS cierres (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fecha TEXT NOT NULL,
-                total_ventas_usd REAL NOT NULL,
-                total_ventas_bs REAL NOT NULL,
-                total_gastos_usd REAL NOT NULL,
-                saldo_neto_usd REAL NOT NULL,
-                responsable TEXT NOT NULL
-            )
-        """)
-        
-        # Migración de columnas faltantes por si la BD ya existía
+    """Crea todas las tablas e inicializa los usuarios si no existen (Compatible con SQLite y Postgres)."""
+    pg = es_postgres()
+    
+    pk_type = "SERIAL PRIMARY KEY" if pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    text_type = "TEXT"
+    num_type = "NUMERIC" if pg else "REAL"
+
+    tablas = [
+        f"""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id {pk_type},
+            nombre {text_type} UNIQUE NOT NULL,
+            clave {text_type} NOT NULL,
+            rol {text_type} NOT NULL
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS productos (
+            id {pk_type},
+            codigo {text_type},
+            nombre {text_type} NOT NULL,
+            categoria {text_type} DEFAULT 'General',
+            precio_usd {num_type} NOT NULL,
+            costo_usd {num_type} DEFAULT 0,
+            stock_actual {num_type} NOT NULL,
+            stock_minimo {num_type} DEFAULT 5
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS clientes (
+            id {pk_type},
+            nombre {text_type} NOT NULL,
+            cedula {text_type},
+            telefono {text_type}
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS ventas (
+            id {pk_type},
+            num_factura {text_type} NOT NULL,
+            producto_id INTEGER,
+            cliente_id INTEGER,
+            cantidad {num_type} NOT NULL,
+            total_usd {num_type} NOT NULL,
+            total_bs {num_type} NOT NULL,
+            metodo_pago {text_type} NOT NULL,
+            es_credito INTEGER DEFAULT 0,
+            fecha {text_type} NOT NULL,
+            responsable {text_type} NOT NULL,
+            estado {text_type} DEFAULT 'Completada',
+            FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS movimientos (
+            id {pk_type},
+            producto_id INTEGER,
+            tipo {text_type} NOT NULL,
+            cantidad {num_type} NOT NULL,
+            fecha {text_type} NOT NULL,
+            responsable {text_type} NOT NULL
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS gastos (
+            id {pk_type},
+            descripcion {text_type} NOT NULL,
+            monto {num_type} NOT NULL,
+            moneda {text_type} DEFAULT 'USD',
+            fecha {text_type} NOT NULL,
+            responsable {text_type} NOT NULL
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS abonos (
+            id {pk_type},
+            cliente_id INTEGER,
+            monto_usd {num_type} NOT NULL,
+            monto_bs {num_type} NOT NULL,
+            metodo_pago {text_type} NOT NULL,
+            fecha {text_type} NOT NULL,
+            responsable {text_type} NOT NULL,
+            FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS cierres (
+            id {pk_type},
+            fecha {text_type} NOT NULL,
+            total_ventas_usd {num_type} NOT NULL,
+            total_ventas_bs {num_type} NOT NULL,
+            total_gastos_usd {num_type} NOT NULL,
+            saldo_neto_usd {num_type} NOT NULL,
+            responsable {text_type} NOT NULL
+        )
+        """
+    ]
+
+    for q in tablas:
         try:
-            cursor.execute("ALTER TABLE ventas ADD COLUMN es_credito INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-            
-        try:
-            cursor.execute("ALTER TABLE ventas ADD COLUMN cliente_id INTEGER")
-        except sqlite3.OperationalError:
+            ejecutar_sql(q)
+        except Exception:
             pass
 
+    # Migración manual defensiva
+    columnas_migrar = [
+        ("ventas", "es_credito INTEGER DEFAULT 0"),
+        ("ventas", "cliente_id INTEGER"),
+        ("productos", f"categoria {text_type} DEFAULT 'General'"),
+        ("productos", f"costo_usd {num_type} DEFAULT 0")
+    ]
+    for tabla, col in columnas_migrar:
         try:
-            cursor.execute("ALTER TABLE productos ADD COLUMN categoria TEXT DEFAULT 'General'")
-        except sqlite3.OperationalError:
+            ejecutar_sql(f"ALTER TABLE {tabla} ADD COLUMN {col}")
+        except Exception:
             pass
 
-        try:
-            cursor.execute("ALTER TABLE productos ADD COLUMN costo_usd REAL DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-
-        # Usuarios iniciales (solo se insertan si no existen)
-        cursor.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('Jose', ?, 'SuperAdmin')", (hash_clave('1234'),))
-        cursor.execute("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('admin', ?, 'Admin')", (hash_clave('admin123'),))
-        
-        # Guardar cambios en la base de datos
-        conn.commit()
+    # Usuarios iniciales
+    try:
+        if pg:
+            ejecutar_sql("INSERT INTO usuarios (nombre, clave, rol) VALUES ('Jose', ?, 'SuperAdmin') ON CONFLICT (nombre) DO NOTHING", (hash_clave('1234'),))
+            ejecutar_sql("INSERT INTO usuarios (nombre, clave, rol) VALUES ('admin', ?, 'Admin') ON CONFLICT (nombre) DO NOTHING", (hash_clave('admin123'),))
+        else:
+            ejecutar_sql("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('Jose', ?, 'SuperAdmin')", (hash_clave('1234'),))
+            ejecutar_sql("INSERT OR IGNORE INTO usuarios (nombre, clave, rol) VALUES ('admin', ?, 'Admin')", (hash_clave('admin123'),))
+    except Exception:
+        pass
 
 # Inicializar Base de Datos al arrancar la app
 init_db()
@@ -177,10 +204,7 @@ if not st.session_state.autenticado:
                 else:
                     try:
                         clave_hashed = hash_clave(clave_input.strip())
-                        with conectar_db() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute("SELECT rol FROM usuarios WHERE nombre = ? AND clave = ?", (usuario_input.strip(), clave_hashed))
-                            row = cursor.fetchone()
+                        row = ejecutar_sql("SELECT rol FROM usuarios WHERE nombre = ? AND clave = ?", (usuario_input.strip(), clave_hashed), fetch="one")
                         
                         if row:
                             st.session_state.autenticado = True
@@ -189,16 +213,22 @@ if not st.session_state.autenticado:
                             st.rerun()
                         else:
                             st.error("Credenciales incorrectas.")
-                    except sqlite3.Error as e:
+                    except Exception as e:
                         st.error(f"Error en base de datos: {e}")
     st.stop()
 
 # --- 4. NOTIFICACIÓN EMERGENTE DE STOCK CRÍTICO ---
 if not st.session_state.alerta_stock:
-    with conectar_db() as conn:
-        df_bajo = pd.read_sql_query("SELECT nombre, stock_actual, stock_minimo FROM productos WHERE stock_actual <= stock_minimo", conn)
-    if not df_bajo.empty:
-        st.toast(f"⚠️ ¡Atención! Hay {len(df_bajo)} productos con stock crítico.", icon="📦")
+    conn = conectar_db()
+    try:
+        q = "SELECT nombre, stock_actual, stock_minimo FROM productos WHERE stock_actual <= stock_minimo"
+        if es_postgres():
+            q = q.replace("?", "%s")
+        df_bajo = pd.read_sql_query(q, conn)
+        if not df_bajo.empty:
+            st.toast(f"⚠️ ¡Atención! Hay {len(df_bajo)} productos con stock crítico.", icon="📦")
+    finally:
+        conn.close()
     st.session_state.alerta_stock = True
 
 # --- 5. BARRA LATERAL ---
@@ -218,18 +248,20 @@ st.sidebar.divider()
 tasa_bcv_defecto = calculadora.obtener_tasa_bcv()
 tasa_bcv = st.sidebar.number_input("Tasa de Cambio (Bs./$):", value=float(tasa_bcv_defecto), step=0.10, format="%.2f")
 
-# Respaldo automático de base de datos
-try:
-    with open(DB_NAME, "rb") as db_file:
-        st.sidebar.download_button(
-            label="💾 Respaldar Base de Datos",
-            data=db_file,
-            file_name=f"respaldo_bodega_{datetime.now().strftime('%Y%m%d')}.db",
-            mime="application/x-sqlite3",
-            use_container_width=True
-        )
-except Exception:
-    pass
+# Respaldo automático si usa SQLite local
+if not es_postgres():
+    try:
+        db_path = os.path.join(os.path.dirname(__file__), "bodega.db")
+        with open(db_path, "rb") as db_file:
+            st.sidebar.download_button(
+                label="💾 Respaldar Base de Datos",
+                data=db_file,
+                file_name=f"respaldo_bodega_{datetime.now().strftime('%Y%m%d')}.db",
+                mime="application/x-sqlite3",
+                use_container_width=True
+            )
+    except Exception:
+        pass
 
 st.sidebar.markdown("### Menú Principal")
 
@@ -257,16 +289,19 @@ opcion = st.sidebar.selectbox(
 if opcion == "🛒 Nueva Venta":
     st.header("🛒 Punto de Venta Directo")
     
-    with conectar_db() as conn:
+    conn = conectar_db()
+    try:
         prods = pd.read_sql_query("SELECT id, codigo, nombre, precio_usd, stock_actual FROM productos WHERE stock_actual > 0", conn)
         clientes_df = pd.read_sql_query("SELECT id, nombre FROM clientes", conn)
+    finally:
+        conn.close()
 
     if prods.empty:
         st.warning("⚠️ No hay productos disponibles en inventario.")
     else:
         col_s1, col_s2 = st.columns([2, 1])
         with col_s1:
-            prod_dict = {f"{row['codigo'] or 'SIN-COD'} | {row['nombre']} (Stock: {row['stock_actual']}) - ${row['precio_usd']:.2f}": row for _, row in prods.iterrows()}
+            prod_dict = {f"{row['codigo'] or 'SIN-COD'} | {row['nombre']} (Stock: {row['stock_actual']}) - ${float(row['precio_usd']):.2f}": row for _, row in prods.iterrows()}
             seleccion = st.selectbox("Seleccionar Producto / Código de Barras", list(prod_dict.keys()))
             prod_sel = prod_dict[seleccion]
         with col_s2:
@@ -290,7 +325,7 @@ if opcion == "🛒 Nueva Venta":
         with col_m2:
             metodo = st.selectbox("Método Principal", ["Efectivo $", "Pago Móvil (Bs)", "Zelle", "Punto de Venta", "Biopago", "Mixto Pago"])
         
-        total_usd = round(prod_sel['precio_usd'] * cant, 2)
+        total_usd = round(float(prod_sel['precio_usd']) * cant, 2)
         total_bs = calculadora.usd_a_bs(total_usd, tasa_bcv)
 
         with col_m3:
@@ -305,44 +340,42 @@ if opcion == "🛒 Nueva Venta":
             if es_credito and not cliente_id:
                 st.error("Debe seleccionar un cliente válido para procesar una venta a crédito.")
             else:
-                with conectar_db() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ? AND stock_actual >= ?", (cant, prod_sel['id'], cant))
+                prod_row = ejecutar_sql("SELECT stock_actual FROM productos WHERE id = ?", (int(prod_sel['id']),), fetch="one")
+                if prod_row and float(prod_row[0]) >= cant:
+                    ejecutar_sql("UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ?", (cant, int(prod_sel['id'])))
                     
-                    if cursor.rowcount > 0:
-                        fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        num_fact = f"FAC-{int(datetime.now().timestamp())}"
-                        
-                        cursor.execute("""
-                            INSERT INTO ventas (num_factura, producto_id, cliente_id, cantidad, total_usd, total_bs, metodo_pago, es_credito, fecha, responsable, estado)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Completada')
-                        """, (num_fact, prod_sel['id'], cliente_id, cant, total_usd, total_bs, metodo, 1 if es_credito else 0, fecha_actual, st.session_state.usuario))
-                        
-                        cursor.execute("""
-                            INSERT INTO movimientos (producto_id, tipo, cantidad, fecha, responsable)
-                            VALUES (?, 'Venta Web', ?, ?, ?)
-                        """, (prod_sel['id'], cant, fecha_actual, st.session_state.usuario))
-                        
-                        conn.commit()
-                        st.success(f"✅ Venta procesada con éxito. Ticket: **{num_fact}**")
+                    fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    num_fact = f"FAC-{int(datetime.now().timestamp())}"
+                    
+                    ejecutar_sql("""
+                        INSERT INTO ventas (num_factura, producto_id, cliente_id, cantidad, total_usd, total_bs, metodo_pago, es_credito, fecha, responsable, estado)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Completada')
+                    """, (num_fact, int(prod_sel['id']), cliente_id, cant, total_usd, total_bs, metodo, 1 if es_credito else 0, fecha_actual, st.session_state.usuario))
+                    
+                    ejecutar_sql("""
+                        INSERT INTO movimientos (producto_id, tipo, cantidad, fecha, responsable)
+                        VALUES (?, 'Venta Web', ?, ?, ?)
+                    """, (int(prod_sel['id']), cant, fecha_actual, st.session_state.usuario))
+                    
+                    st.success(f"✅ Venta procesada con éxito. Ticket: **{num_fact}**")
 
-                        ticket_txt = f"================================\n"
-                        ticket_txt += f"        MI BODEGA PRO           \n"
-                        ticket_txt += f"================================\n"
-                        ticket_txt += f"Comprobante: {num_fact}\n"
-                        ticket_txt += f"Fecha: {fecha_actual}\n"
-                        ticket_txt += f"Cajero: {st.session_state.usuario}\n"
-                        ticket_txt += f"--------------------------------\n"
-                        ticket_txt += f"Prod: {prod_sel['nombre']}\n"
-                        ticket_txt += f"Cant: {cant} x ${prod_sel['precio_usd']:.2f}\n"
-                        ticket_txt += f"Total USD: ${total_usd:.2f}\n"
-                        ticket_txt += f"Total Bs: {total_bs:,.2f} Bs.\n"
-                        ticket_txt += f"Método: {metodo} {'(FIADO)' if es_credito else ''}\n"
-                        ticket_txt += f"================================\n"
+                    ticket_txt = f"================================\n"
+                    ticket_txt += f"        MI BODEGA PRO           \n"
+                    ticket_txt += f"================================\n"
+                    ticket_txt += f"Comprobante: {num_fact}\n"
+                    ticket_txt += f"Fecha: {fecha_actual}\n"
+                    ticket_txt += f"Cajero: {st.session_state.usuario}\n"
+                    ticket_txt += f"--------------------------------\n"
+                    ticket_txt += f"Prod: {prod_sel['nombre']}\n"
+                    ticket_txt += f"Cant: {cant} x ${float(prod_sel['precio_usd']):.2f}\n"
+                    ticket_txt += f"Total USD: ${total_usd:.2f}\n"
+                    ticket_txt += f"Total Bs: {total_bs:,.2f} Bs.\n"
+                    ticket_txt += f"Método: {metodo} {'(FIADO)' if es_credito else ''}\n"
+                    ticket_txt += f"================================\n"
 
-                        st.download_button("🖨️ Descargar Recibo / Ticket", ticket_txt, file_name=f"Ticket_{num_fact}.txt", mime="text/plain")
-                    else:
-                        st.error("❌ Stock insuficiente.")
+                    st.download_button("🖨️ Descargar Recibo / Ticket", ticket_txt, file_name=f"Ticket_{num_fact}.txt", mime="text/plain")
+                else:
+                    st.error("❌ Stock insuficiente.")
 
 # MÓDULO 2: INVENTARIO / PRODUCTOS
 elif opcion == "📦 Inventario / Productos":
@@ -351,10 +384,14 @@ elif opcion == "📦 Inventario / Productos":
     tab_ver, tab_agregar, tab_editar = st.tabs(["Ver Inventario", "Registrar Nuevo Producto", "Editar / Eliminar Producto"])
     
     with tab_ver:
-        with conectar_db() as conn:
+        conn = conectar_db()
+        try:
             df = pd.read_sql_query("SELECT id, codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo FROM productos", conn)
+        finally:
+            conn.close()
         
         if not df.empty:
+            df['precio_usd'] = df['precio_usd'].astype(float)
             df['precio_bs'] = df['precio_usd'].apply(lambda x: calculadora.usd_a_bs(x, tasa_bcv))
             busqueda = st.text_input("🔍 Buscar por nombre o código", "")
             if busqueda:
@@ -380,19 +417,19 @@ elif opcion == "📦 Inventario / Productos":
                 if not nom.strip():
                     st.warning("El nombre es requerido.")
                 else:
-                    with conectar_db() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (cod.strip(), nom.strip(), cat.strip(), p_usd, c_usd, stk, stk_min))
-                        conn.commit()
+                    ejecutar_sql("""
+                        INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (cod.strip(), nom.strip(), cat.strip(), p_usd, c_usd, stk, stk_min))
                     st.success("Producto registrado correctamente.")
                     st.rerun()
 
     with tab_editar:
-        with conectar_db() as conn:
+        conn = conectar_db()
+        try:
             prods_df = pd.read_sql_query("SELECT * FROM productos", conn)
+        finally:
+            conn.close()
         
         if prods_df.empty:
             st.info("No hay productos registrados para modificar o eliminar.")
@@ -415,14 +452,11 @@ elif opcion == "📦 Inventario / Productos":
                     e_stock_min = st.number_input("Stock Mínimo", min_value=1.0, value=float(p_info['stock_minimo']), step=1.0)
 
                     if st.form_submit_button("Actualizar Producto", type="primary"):
-                        with conectar_db() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute("""
-                                UPDATE productos 
-                                SET codigo = ?, nombre = ?, categoria = ?, precio_usd = ?, costo_usd = ?, stock_actual = ?, stock_minimo = ?
-                                WHERE id = ?
-                            """, (e_cod.strip(), e_nom.strip(), e_cat.strip(), e_precio, e_costo, e_stock, e_stock_min, p_info['id']))
-                            conn.commit()
+                        ejecutar_sql("""
+                            UPDATE productos 
+                            SET codigo = ?, nombre = ?, categoria = ?, precio_usd = ?, costo_usd = ?, stock_actual = ?, stock_minimo = ?
+                            WHERE id = ?
+                        """, (e_cod.strip(), e_nom.strip(), e_cat.strip(), e_precio, e_costo, e_stock, e_stock_min, int(p_info['id'])))
                         st.success("✅ Producto actualizado correctamente.")
                         st.rerun()
 
@@ -430,10 +464,7 @@ elif opcion == "📦 Inventario / Productos":
                 st.subheader("🗑️ Eliminar Producto")
                 st.warning(f"¿Desea eliminar permanentemente el producto **{p_info['nombre']}**?")
                 if st.button("🗑️ Eliminar Definitivamente", type="primary", key="btn_del_prod"):
-                    with conectar_db() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM productos WHERE id = ?", (p_info['id'],))
-                        conn.commit()
+                    ejecutar_sql("DELETE FROM productos WHERE id = ?", (int(p_info['id']),))
                     st.success("✅ Producto eliminado con éxito.")
                     st.rerun()
 
@@ -443,15 +474,23 @@ elif opcion == "👥 Clientes":
     tab_l, tab_r = st.tabs(["Lista de Clientes y Saldos", "Registrar Cliente"])
     
     with tab_l:
-        with conectar_db() as conn:
+        conn = conectar_db()
+        try:
             df_cli = pd.read_sql_query("SELECT * FROM clientes", conn)
+        finally:
+            conn.close()
             
         if not df_cli.empty:
             saldos = []
             for _, cli in df_cli.iterrows():
-                with conectar_db() as conn:
-                    v_credito = pd.read_sql_query("SELECT SUM(total_usd) as tot FROM ventas WHERE cliente_id = ? AND es_credito = 1 AND estado = 'Completada'", conn, params=(cli['id'],))['tot'].fillna(0).iloc[0]
-                    v_abonos = pd.read_sql_query("SELECT SUM(monto_usd) as tot FROM abonos WHERE cliente_id = ?", conn, params=(cli['id'],))['tot'].fillna(0).iloc[0]
+                q_v = "SELECT SUM(total_usd) as tot FROM ventas WHERE cliente_id = ? AND es_credito = 1 AND estado = 'Completada'"
+                q_a = "SELECT SUM(monto_usd) as tot FROM abonos WHERE cliente_id = ?"
+                
+                v_res = ejecutar_sql(q_v, (int(cli['id']),), fetch="one")
+                a_res = ejecutar_sql(q_a, (int(cli['id']),), fetch="one")
+                
+                v_credito = float(v_res[0]) if v_res and v_res[0] is not None else 0.0
+                v_abonos = float(a_res[0]) if a_res and a_res[0] is not None else 0.0
                 saldos.append(v_credito - v_abonos)
                 
             df_cli['Saldo Pendiente ($)'] = saldos
@@ -466,11 +505,8 @@ elif opcion == "👥 Clientes":
             telefono_cli = st.text_input("Teléfono")
             if st.form_submit_button("Guardar Cliente"):
                 if nombre_cli.strip():
-                    with conectar_db() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT INTO clientes (nombre, cedula, telefono) VALUES (?, ?, ?)", 
-                                       (nombre_cli.strip(), cedula_cli.strip(), telefono_cli.strip()))
-                        conn.commit()
+                    ejecutar_sql("INSERT INTO clientes (nombre, cedula, telefono) VALUES (?, ?, ?)", 
+                                 (nombre_cli.strip(), cedula_cli.strip(), telefono_cli.strip()))
                     st.success("Cliente guardado con éxito.")
                 else:
                     st.warning("Ingrese el nombre del cliente.")
@@ -478,8 +514,11 @@ elif opcion == "👥 Clientes":
 # MÓDULO 4: ABONOS
 elif opcion == "💰 Abonos":
     st.header("💰 Registro de Abonos a Cuentas Fiadas")
-    with conectar_db() as conn:
+    conn = conectar_db()
+    try:
         clientes_df = pd.read_sql_query("SELECT id, nombre FROM clientes", conn)
+    finally:
+        conn.close()
     
     if clientes_df.empty:
         st.info("No hay clientes registrados en el sistema.")
@@ -487,11 +526,16 @@ elif opcion == "💰 Abonos":
         cli_dict = {row['nombre']: row['id'] for _, row in clientes_df.iterrows()}
         cliente_sel = st.selectbox("Seleccionar Cliente", list(cli_dict.keys()))
         
-        with conectar_db() as conn:
-            c_id = cli_dict[cliente_sel]
-            v_cred = pd.read_sql_query("SELECT SUM(total_usd) as tot FROM ventas WHERE cliente_id = ? AND es_credito = 1 AND estado = 'Completada'", conn, params=(c_id,))['tot'].fillna(0).iloc[0]
-            v_abo = pd.read_sql_query("SELECT SUM(monto_usd) as tot FROM abonos WHERE cliente_id = ?", conn, params=(c_id,))['tot'].fillna(0).iloc[0]
-            deuda = v_cred - v_abo
+        c_id = int(cli_dict[cliente_sel])
+        q_v = "SELECT SUM(total_usd) as tot FROM ventas WHERE cliente_id = ? AND es_credito = 1 AND estado = 'Completada'"
+        q_a = "SELECT SUM(monto_usd) as tot FROM abonos WHERE cliente_id = ?"
+        
+        v_res = ejecutar_sql(q_v, (c_id,), fetch="one")
+        a_res = ejecutar_sql(q_a, (c_id,), fetch="one")
+        
+        v_cred = float(v_res[0]) if v_res and v_res[0] is not None else 0.0
+        v_abo = float(a_res[0]) if a_res and a_res[0] is not None else 0.0
+        deuda = v_cred - v_abo
 
         st.info(f"Deuda Actual de **{cliente_sel}**: **${deuda:.2f} USD**")
 
@@ -499,29 +543,36 @@ elif opcion == "💰 Abonos":
         metodo_abono = st.selectbox("Método de Pago", ["Efectivo $", "Pago Móvil (Bs)", "Zelle"])
         
         if st.button("Registrar Abono"):
-            with conectar_db() as conn:
-                cursor = conn.cursor()
-                fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                monto_bs = calculadora.usd_a_bs(monto_abono, tasa_bcv)
-                
-                cursor.execute("""
-                    INSERT INTO abonos (cliente_id, monto_usd, monto_bs, metodo_pago, fecha, responsable)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (c_id, monto_abono, monto_bs, metodo_abono, fecha, st.session_state.usuario))
-                conn.commit()
+            fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            monto_bs = calculadora.usd_a_bs(monto_abono, tasa_bcv)
+            
+            ejecutar_sql("""
+                INSERT INTO abonos (cliente_id, monto_usd, monto_bs, metodo_pago, fecha, responsable)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (c_id, monto_abono, monto_bs, metodo_abono, fecha, st.session_state.usuario))
             st.success(f"✅ Abono de ${monto_abono:.2f} guardado para {cliente_sel}.")
 
 # MÓDULO 5: CIERRE DE CAJA
 elif opcion == "🔒 Cierre de Caja":
     st.header("🔒 Cierre de Caja Diario")
     
-    with conectar_db() as conn:
-        ventas_hoy = pd.read_sql_query("SELECT total_usd, total_bs FROM ventas WHERE DATE(fecha) = DATE('now') AND estado = 'Completada'", conn)
-        gastos_hoy = pd.read_sql_query("SELECT monto FROM gastos WHERE DATE(fecha) = DATE('now')", conn)
+    conn = conectar_db()
+    try:
+        if es_postgres():
+            q_v = "SELECT total_usd, total_bs FROM ventas WHERE fecha::date = CURRENT_DATE AND estado = 'Completada'"
+            q_g = "SELECT monto FROM gastos WHERE fecha::date = CURRENT_DATE"
+        else:
+            q_v = "SELECT total_usd, total_bs FROM ventas WHERE DATE(fecha) = DATE('now') AND estado = 'Completada'"
+            q_g = "SELECT monto FROM gastos WHERE DATE(fecha) = DATE('now')"
+            
+        ventas_hoy = pd.read_sql_query(q_v, conn)
+        gastos_hoy = pd.read_sql_query(q_g, conn)
+    finally:
+        conn.close()
     
-    tot_ventas_usd = ventas_hoy['total_usd'].sum() if not ventas_hoy.empty else 0.0
-    tot_ventas_bs = ventas_hoy['total_bs'].sum() if not ventas_hoy.empty else 0.0
-    tot_gastos_usd = gastos_hoy['monto'].sum() if not gastos_hoy.empty else 0.0
+    tot_ventas_usd = float(ventas_hoy['total_usd'].sum()) if not ventas_hoy.empty else 0.0
+    tot_ventas_bs = float(ventas_hoy['total_bs'].sum()) if not ventas_hoy.empty else 0.0
+    tot_gastos_usd = float(gastos_hoy['monto'].sum()) if not gastos_hoy.empty else 0.0
     saldo_neto = tot_ventas_usd - tot_gastos_usd
     
     col1, col2, col3, col4 = st.columns(4)
@@ -532,59 +583,61 @@ elif opcion == "🔒 Cierre de Caja":
     
     st.divider()
     if st.button("Ejecutar Cierre de Caja de Hoy", type="primary"):
-        with conectar_db() as conn:
-            cursor = conn.cursor()
-            fecha_cierre = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("""
-                INSERT INTO cierres (fecha, total_ventas_usd, total_ventas_bs, total_gastos_usd, saldo_neto_usd, responsable)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (fecha_cierre, tot_ventas_usd, tot_ventas_bs, tot_gastos_usd, saldo_neto, st.session_state.usuario))
-            conn.commit()
+        fecha_cierre = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ejecutar_sql("""
+            INSERT INTO cierres (fecha, total_ventas_usd, total_ventas_bs, total_gastos_usd, saldo_neto_usd, responsable)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (fecha_cierre, tot_ventas_usd, tot_ventas_bs, tot_gastos_usd, saldo_neto, st.session_state.usuario))
         st.success(f"✅ Cierre diario registrado por **{st.session_state.usuario}**.")
 
 # MÓDULO 6: ANULACIÓN DE VENTAS
 elif opcion == "🔴 Anulación de Ventas":
     st.header("🔴 Anulación de Ventas")
     
-    with conectar_db() as conn:
+    conn = conectar_db()
+    try:
         ventas_df = pd.read_sql_query("""
             SELECT v.id, v.num_factura, p.nombre AS producto, v.producto_id, v.cantidad, v.total_usd, v.fecha 
             FROM ventas v 
             LEFT JOIN productos p ON v.producto_id = p.id 
             WHERE v.estado = 'Completada' ORDER BY v.id DESC LIMIT 50
         """, conn)
+    finally:
+        conn.close()
     
     if ventas_df.empty:
         st.info("No hay ventas activas disponibles para anular.")
     else:
-        opciones_ventas = {f"{row['num_factura']} | {row['producto']} ({row['cantidad']} unid) - ${row['total_usd']:.2f}": row for _, row in ventas_df.iterrows()}
+        opciones_ventas = {f"{row['num_factura']} | {row['producto']} ({row['cantidad']} unid) - ${float(row['total_usd']):.2f}": row for _, row in ventas_df.iterrows()}
         sel_v = st.selectbox("Seleccione la venta a anular", list(opciones_ventas.keys()))
         v_data = opciones_ventas[sel_v]
         
         if st.button("⚠️ Confirmar Anulación", type="primary"):
-            with conectar_db() as conn:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE ventas SET estado = 'Anulada' WHERE id = ?", (v_data['id'],))
-                cursor.execute("UPDATE productos SET stock_actual = stock_actual + ? WHERE id = ?", (v_data['cantidad'], v_data['producto_id']))
-                conn.commit()
+            ejecutar_sql("UPDATE ventas SET estado = 'Anulada' WHERE id = ?", (int(v_data['id']),))
+            ejecutar_sql("UPDATE productos SET stock_actual = stock_actual + ? WHERE id = ?", (float(v_data['cantidad']), int(v_data['producto_id'])))
             st.success(f"Venta {v_data['num_factura']} anulada y stock retornado al inventario.")
 
 # MÓDULO 7: DASHBOARD
 elif opcion == "📊 Dashboard":
     st.header("📊 Dashboard del Negocio")
     
-    with conectar_db() as conn:
+    conn = conectar_db()
+    try:
         df_v = pd.read_sql_query("SELECT total_usd, fecha FROM ventas WHERE estado = 'Completada'", conn)
         df_p = pd.read_sql_query("SELECT nombre, stock_actual FROM productos", conn)
+    finally:
+        conn.close()
     
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("📦 Stock por Producto")
         if not df_p.empty:
+            df_p['stock_actual'] = df_p['stock_actual'].astype(float)
             st.bar_chart(df_p.set_index("nombre")["stock_actual"])
     with c2:
         st.subheader("💵 Tendencia de Ventas ($)")
         if not df_v.empty:
+            df_v['total_usd'] = df_v['total_usd'].astype(float)
             st.line_chart(df_v["total_usd"])
 
 # MÓDULO 8: CALCULADORA DE PRECIOS POR UNIDAD
@@ -657,26 +710,22 @@ elif opcion == "🧮 Calculadora":
             if not nom_prod.strip():
                 st.warning("Ingrese un nombre de producto válido.")
             else:
-                with conectar_db() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT id, stock_actual FROM productos WHERE LOWER(nombre) = LOWER(?)", (nom_prod.strip(),))
-                    prod_existente = cursor.fetchone()
-                    
-                    if prod_existente:
-                        nuevo_stock = prod_existente[1] + stk_inicial
-                        cursor.execute("""
-                            UPDATE productos 
-                            SET precio_usd = ?, costo_usd = ?, stock_actual = ?
-                            WHERE id = ?
-                        """, (round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), nuevo_stock, prod_existente[0]))
-                        st.success(f"✅ Producto **{nom_prod}** actualizado. Nuevo precio: **${precio_venta_unidad_usd:.2f}**, Nuevo stock: **{nuevo_stock}** unid.")
-                    else:
-                        cursor.execute("""
-                            INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
-                            VALUES (?, ?, ?, ?, ?, ?, 5.0)
-                        """, (cod_prod.strip(), nom_prod.strip(), cat_prod.strip(), round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), stk_inicial))
-                        st.success(f"✅ Producto **{nom_prod}** creado en inventario con precio de **${precio_venta_unidad_usd:.2f}** y stock de **{stk_inicial}** unid.")
-                    conn.commit()
+                prod_existente = ejecutar_sql("SELECT id, stock_actual FROM productos WHERE LOWER(nombre) = LOWER(?)", (nom_prod.strip(),), fetch="one")
+                
+                if prod_existente:
+                    nuevo_stock = float(prod_existente[1]) + stk_inicial
+                    ejecutar_sql("""
+                        UPDATE productos 
+                        SET precio_usd = ?, costo_usd = ?, stock_actual = ?
+                        WHERE id = ?
+                    """, (round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), nuevo_stock, int(prod_existente[0])))
+                    st.success(f"✅ Producto **{nom_prod}** actualizado. Nuevo precio: **${precio_venta_unidad_usd:.2f}**, Nuevo stock: **{nuevo_stock}** unid.")
+                else:
+                    ejecutar_sql("""
+                        INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
+                        VALUES (?, ?, ?, ?, ?, ?, 5.0)
+                    """, (cod_prod.strip(), nom_prod.strip(), cat_prod.strip(), round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), stk_inicial))
+                    st.success(f"✅ Producto **{nom_prod}** creado en inventario con precio de **${precio_venta_unidad_usd:.2f}** y stock de **{stk_inicial}** unid.")
 
 # MÓDULO 9: GASTOS / CAJA CHICA
 elif opcion == "💸 Gastos / Caja Chica":
@@ -686,23 +735,25 @@ elif opcion == "💸 Gastos / Caja Chica":
         monto = st.number_input("Monto ($)", min_value=0.1, step=0.5)
         if st.form_submit_button("Guardar Gasto"):
             if desc.strip():
-                with conectar_db() as conn:
-                    cursor = conn.cursor()
-                    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    cursor.execute("INSERT INTO gastos (descripcion, monto, moneda, fecha, responsable) VALUES (?, ?, 'USD', ?, ?)",
-                                   (desc.strip(), monto, fecha, st.session_state.usuario))
-                    conn.commit()
+                fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                ejecutar_sql("INSERT INTO gastos (descripcion, monto, moneda, fecha, responsable) VALUES (?, ?, 'USD', ?, ?)",
+                             (desc.strip(), monto, fecha, st.session_state.usuario))
                 st.success("Gasto registrado con éxito.")
 
-    with conectar_db() as conn:
+    conn = conectar_db()
+    try:
         df_g = pd.read_sql_query("SELECT * FROM gastos ORDER BY id DESC", conn)
+    finally:
+        conn.close()
+
     if not df_g.empty:
         st.dataframe(df_g, use_container_width=True)
 
 # MÓDULO 10: HISTORIAL Y TRANSACCIONES
 elif opcion == "📜 Historial y Transacciones":
     st.header("📜 Historial General de Transacciones")
-    with conectar_db() as conn:
+    conn = conectar_db()
+    try:
         df_h = pd.read_sql_query("""
             SELECT v.id, v.num_factura, p.nombre AS producto, c.nombre AS cliente, v.cantidad, v.total_usd, v.total_bs, v.metodo_pago, v.es_credito, v.fecha, v.responsable, v.estado 
             FROM ventas v 
@@ -710,6 +761,9 @@ elif opcion == "📜 Historial y Transacciones":
             LEFT JOIN clientes c ON v.cliente_id = c.id
             ORDER BY v.id DESC
         """, conn)
+    finally:
+        conn.close()
+
     if not df_h.empty:
         st.dataframe(df_h, use_container_width=True)
 
@@ -723,8 +777,11 @@ elif opcion == "⚙️ Gestión de Usuarios":
         tab_u1, tab_u2, tab_u3, tab_u4 = st.tabs(["Lista de Usuarios", "Crear Usuario", "Cambiar Clave", "Eliminar Usuario"])
         
         with tab_u1:
-            with conectar_db() as conn:
+            conn = conectar_db()
+            try:
                 df_u = pd.read_sql_query("SELECT id, nombre, rol FROM usuarios", conn)
+            finally:
+                conn.close()
             st.dataframe(df_u, use_container_width=True)
             
         with tab_u2:
@@ -737,22 +794,22 @@ elif opcion == "⚙️ Gestión de Usuarios":
                 if st.form_submit_button("Crear Usuario", type="primary"):
                     if n_usr.strip() and c_usr.strip():
                         try:
-                            with conectar_db() as conn:
-                                cursor = conn.cursor()
-                                cursor.execute("INSERT INTO usuarios (nombre, clave, rol) VALUES (?, ?, ?)", 
-                                               (n_usr.strip(), hash_clave(c_usr.strip()), r_usr))
-                                conn.commit()
+                            ejecutar_sql("INSERT INTO usuarios (nombre, clave, rol) VALUES (?, ?, ?)", 
+                                         (n_usr.strip(), hash_clave(c_usr.strip()), r_usr))
                             st.success("Usuario registrado de forma segura.")
                             st.rerun()
-                        except sqlite3.IntegrityError:
-                            st.error("El nombre de usuario ya existe.")
+                        except Exception:
+                            st.error("El nombre de usuario ya existe o hubo un error al crearlo.")
                     else:
                         st.warning("Debe ingresar usuario y contraseña.")
 
         with tab_u3:
             st.subheader("🔑 Cambiar Contraseña de Usuario")
-            with conectar_db() as conn:
+            conn = conectar_db()
+            try:
                 usrs_df = pd.read_sql_query("SELECT id, nombre FROM usuarios", conn)
+            finally:
+                conn.close()
             
             if not usrs_df.empty:
                 with st.form("form_cambiar_clave", clear_on_submit=True):
@@ -763,23 +820,22 @@ elif opcion == "⚙️ Gestión de Usuarios":
                     if btn_cambiar_pass:
                         nueva_clave_limpia = nueva_clave.strip()
                         if nueva_clave_limpia:
-                            # Se aplica la encriptación hash_clave() antes de guardar en la BD
                             clave_encriptada = hash_clave(nueva_clave_limpia)
-                            with conectar_db() as conn:
-                                cursor = conn.cursor()
-                                cursor.execute(
-                                    "UPDATE usuarios SET clave = ? WHERE nombre = ?", 
-                                    (clave_encriptada, usr_sel_clave.strip())
-                                )
-                                conn.commit()
+                            ejecutar_sql(
+                                "UPDATE usuarios SET clave = ? WHERE nombre = ?", 
+                                (clave_encriptada, usr_sel_clave.strip())
+                            )
                             st.success(f"✅ Contraseña del usuario '{usr_sel_clave}' actualizada con éxito.")
                         else:
                             st.warning("Ingrese una contraseña válida (no puede estar vacía).")
 
         with tab_u4:
             st.subheader("🗑️ Eliminar Usuario")
-            with conectar_db() as conn:
+            conn = conectar_db()
+            try:
                 usrs_df_del = pd.read_sql_query("SELECT id, nombre, rol FROM usuarios", conn)
+            finally:
+                conn.close()
             
             if not usrs_df_del.empty:
                 usrs_filtrados = usrs_df_del[usrs_df_del['nombre'] != st.session_state.usuario]
@@ -791,9 +847,6 @@ elif opcion == "⚙️ Gestión de Usuarios":
                     st.warning(f"⚠️ Esta acción borrará al usuario **{usr_sel_del}** de la base de datos.")
                     
                     if st.button("🗑️ Eliminar Usuario Definitivamente", type="primary", key="btn_del_usr"):
-                        with conectar_db() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute("DELETE FROM usuarios WHERE nombre = ?", (usr_sel_del,))
-                            conn.commit()
+                        ejecutar_sql("DELETE FROM usuarios WHERE nombre = ?", (usr_sel_del,))
                         st.success(f"✅ Usuario '{usr_sel_del}' eliminado.")
                         st.rerun()
