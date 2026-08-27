@@ -762,16 +762,20 @@ elif opcion == "⚙️ Gestión de Usuarios":
                     btn_cambiar_pass = st.form_submit_button("Actualizar Contraseña", type="primary")
                     
                     if btn_cambiar_pass:
-                        if nueva_clave.strip():
-                            clave_hash_nueva = hash_clave(nueva_clave.strip())
+                        nueva_clave_limpia = nueva_clave.strip()
+                        if nueva_clave_limpia:
+                            # Se aplica la encriptación hash_clave() antes de guardar en la BD
+                            clave_encriptada = hash_clave(nueva_clave_limpia)
                             with conectar_db() as conn:
                                 cursor = conn.cursor()
-                                cursor.execute("UPDATE usuarios SET clave = ? WHERE nombre = ?", (clave_hash_nueva, usr_sel_clave))
+                                cursor.execute(
+                                    "UPDATE usuarios SET clave = ? WHERE nombre = ?", 
+                                    (clave_encriptada, usr_sel_clave.strip())
+                                )
                                 conn.commit()
                             st.success(f"✅ Contraseña del usuario '{usr_sel_clave}' actualizada con éxito.")
-                            st.rerun()
                         else:
-                            st.warning("Ingrese una contraseña válida.")
+                            st.warning("Ingrese una contraseña válida (no puede estar vacía).")
 
         with tab_u4:
             st.subheader("🗑️ Eliminar Usuario")
