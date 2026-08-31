@@ -4,6 +4,68 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 import calculadora
+import sqlite3
+
+def obtener_productos():
+    conn = sqlite3.connect("bodega.db")
+    # Traemos id, código, nombre, precio y stock
+    df = pd.read_sql_query("SELECT id, codigo, nombre, precio, stock FROM productos", conn)
+    conn.close()
+    return df
+
+st.subheader("🛒 Registrar Nueva Venta")
+
+df_productos = obtener_productos()
+
+if not df_productos.empty:
+    # 1. Crear una etiqueta formateada para facilitar la búsqueda
+    # Muestra: "[COD123] Harina Pan - $1.50 (Stock: 20)"
+    df_productos["busqueda"] = df_productos.apply(
+        lambda r: f"[{r['codigo']}] {r['nombre']} — ${r['precio']:.2f} (Stock: {r['stock']})", axis=1
+    )
+
+    # 2. Selector con autocomplete (permite escribir código o nombre)
+    opcion_seleccionada = st.selectbox(
+        "🔎 Buscar producto (escribe el nombre o código de barras):",
+        options=[""] + df_productos["busqueda"].tolist(),
+        index=0,
+        help="Puedes escribir el código o las primeras letras del nombre."
+    )
+
+    if opcion_seleccionada:
+        # Extraer el producto seleccionado
+        producto_idx = df_productos["busqueda"].tolist().index(opcion_seleccionada) - 1
+        prod = df_productos.iloc[producto_idx]
+
+        st.success(f"Seleccionado: **{prod['nombre']}** | Precio: **${prod['precio']:.2f}** | Stock disponible: **{prod['stock']}**")
+
+        # 3. Formulario para agregar al carrito
+        col1, col2 = st.columns(2)
+        with col1:
+            cantidad = st.number_input("Cantidad a llevar:", min_value=1, max_value=int(prod['stock']), value=1)
+        with col2:
+            subtotal = cantidad * prod['precio']
+            st.metric("Subtotal", f"${subtotal:.2f}")
+
+        if st.button("➕ Agregar al Carrito"):
+            # Lógica para guardar en st.session_state.carrito
+            if 'carrito' not in st.session_state:
+                st.session_state.carrito = []
+            
+            st.session_state.carrito.append({
+                "id": prod['id'],
+                "codigo": prod['codigo'],
+                "nombre": prod['nombre'],
+                "precio": prod['precio'],
+                "cantidad": cantidad,
+                "subtotal": subtotal
+            })
+            st.toast(f"{prod['nombre']} agregado al carrito", icon="✅")
+
+else:
+    st.warning("No hay productos registrados en la base de datos.")
+
+
 
 # --- 1. CONFIGURACIÓN Y CONEXIÓN BASE DE DATOS ---
 def es_postgres():
