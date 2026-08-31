@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import urllib.request
 import requests
+from streamlit_option_menu import option_menu
 
 
 # --- CONFIGURACIÓN DE PÁGINA ---
@@ -266,19 +267,22 @@ with st.sidebar:
     # Menú elegante con option_menu
     opcion = option_menu(
         menu_title="Menú Principal",
-        options=[
-            "Productos / Inventario",
-            "Registrar Venta",
-            "Clientes y Créditos",
-            "Abonos",
-            "Cierre de Caja",
-            "Anulación de Ventas",
-            "Dashboard",
-            "Calculadora",
-            "Gastos / Caja Chica",
-            "Historial y Transacciones",
-            "Gestión de Usuarios"
-        ],
+        opciones_menu = [
+    "📦 Productos / Inventario",
+    "🛒 Registrar Venta",
+    "👥 Clientes y Créditos",
+    "💳 Abonos",
+    "🔒 Cierre de Caja",
+    "🔴 Anulación de Ventas",
+    "📊 Dashboard",
+    "🧮 Calculadora",
+    "💸 Gastos / Caja Chica",
+    "📜 Historial y Transacciones",
+    "⚙️ Gestión de Usuarios"
+]
+
+opcion_raw = st.radio("Menú Principal", opciones_menu)
+opcion = opcion_raw.split(" ", 1)[1]
         icons=[
             "box-seam", "cart-check", "people", "credit-card", 
             "lock", "x-circle", "bar-chart-line", "calculator", 
