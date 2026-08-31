@@ -6,8 +6,6 @@ from datetime import datetime
 import json
 import urllib.request
 import requests
-from streamlit_option_menu import option_menu
-
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -16,11 +14,74 @@ st.set_page_config(
     layout="wide"
 )
 
+# --- ESTILOS CSS PERSONALIZADOS (DISEÑO MODERNO Y ELEGANTE) ---
+st.markdown("""
+<style>
+    /* Ocultar elementos por defecto */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    
+    /* Estilo del Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #1a1d24;
+        border-right: 1px solid #2d323e;
+    }
+    
+    /* Tarjeta de Usuario y Tasa */
+    .user-card {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        margin-bottom: 15px;
+        color: white;
+    }
+    .user-card h4 {
+        margin: 0;
+        color: #38bdf8;
+        font-size: 1.1rem;
+    }
+    .user-card p {
+        margin: 0;
+        color: #94a3b8;
+        font-size: 0.85rem;
+    }
+    
+    /* Estilizar Radio Buttons para parecer un Menú Pro */
+    div[data-testid="stRadio"] > label {
+        display: none;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] {
+        gap: 6px;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label {
+        background-color: #242832;
+        border: 1px solid #323846;
+        padding: 10px 14px;
+        border-radius: 8px;
+        color: #e2e8f0;
+        transition: all 0.2s ease;
+        cursor: pointer;
+        font-weight: 500;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label:hover {
+        background-color: #2d3342;
+        border-color: #3b82f6;
+        color: #ffffff;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {
+        background: linear-gradient(90deg, #2563eb 0%, #1d4ed8 100%);
+        border-color: #60a5fa;
+        color: #ffffff;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- CONSULTA AUTOMÁTICA TASA BCV ---
-@st.cache_data(ttl=3600)  # Guarda en caché por 1 hora
+@st.cache_data(ttl=3600)
 def obtener_tasa_bcv_api():
-    """Obtiene la tasa oficial del BCV mediante API pública o fallback ligero"""
-    # Intentar API 1: pyDolarVenezuela pública
+    """Obtiene la tasa oficial del BCV desde API pública con fallback"""
     try:
         url = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -34,7 +95,6 @@ def obtener_tasa_bcv_api():
     except Exception:
         pass
 
-    # Fallback API 2: VeDolar u otra API alternativa sin necesidad de bs4 / scraping
     try:
         res = requests.get("https://ve.dolarapi.com/v1/dolares/oficial", timeout=5)
         if res.status_code == 200:
@@ -44,24 +104,9 @@ def obtener_tasa_bcv_api():
     except Exception:
         pass
 
-    return 60.0  # Valor por defecto si fallan las conexiones
+    return 60.0  # Tasa de respaldo en caso de desconexión
 
-    # Fallback: Scraping directo a la página principal del BCV
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get("https://www.bcv.org.ve/", headers=headers, timeout=5, verify=False)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.content, 'html.parser')
-            div_usd = soup.find('div', id='dolar')
-            if div_usd:
-                valor_str = div_usd.find('strong').text.strip().replace(',', '.')
-                return float(valor_str)
-    except Exception:
-        pass
-
-    return 60.0  # Valor por defecto si no hay conexión
-
-# --- CLASE CALCULADORA Y AUXILIARES ---
+# --- CLASE CALCULADORA ---
 class CalculadoraTasa:
     @staticmethod
     def usd_a_bs(monto_usd, tasa):
@@ -76,7 +121,7 @@ calculadora = CalculadoraTasa()
 def hash_clave(clave):
     return hashlib.sha256(clave.encode()).hexdigest()
 
-# --- CONEXIÓN Y BASE DE DATOS ---
+# --- CONEXIÓN A BASE DE DATOS ---
 def conectar_db():
     conn = sqlite3.connect("bodega.db", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -85,7 +130,6 @@ def conectar_db():
 def inicializar_db():
     conn = conectar_db()
     cursor = conn.cursor()
-    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +138,6 @@ def inicializar_db():
             rol TEXT NOT NULL
         )
     """)
-    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,7 +150,6 @@ def inicializar_db():
             stock_minimo REAL DEFAULT 5.0
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,7 +158,6 @@ def inicializar_db():
             cedula TEXT
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +174,6 @@ def inicializar_db():
             estado TEXT DEFAULT 'Completada'
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS abonos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,7 +186,6 @@ def inicializar_db():
             responsable TEXT NOT NULL
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS gastos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,7 +196,6 @@ def inicializar_db():
             responsable TEXT NOT NULL
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS movimientos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,7 +206,6 @@ def inicializar_db():
             responsable TEXT NOT NULL
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cierres (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,14 +217,12 @@ def inicializar_db():
             responsable TEXT NOT NULL
         )
     """)
-
     cursor.execute("SELECT COUNT(*) FROM usuarios")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
             "INSERT INTO usuarios (nombre, clave, rol) VALUES (?, ?, ?)",
             ("admin", hash_clave("admin123"), "SuperAdmin")
         )
-
     conn.commit()
     conn.close()
 
@@ -195,13 +230,11 @@ def ejecutar_sql(query, params=(), fetch=None):
     conn = conectar_db()
     cursor = conn.cursor()
     cursor.execute(query, params)
-    
     res = None
     if fetch == "one":
         res = cursor.fetchone()
     elif fetch == "all":
         res = cursor.fetchall()
-        
     conn.commit()
     conn.close()
     return res
@@ -216,17 +249,14 @@ if "usuario" not in st.session_state:
 if "rol" not in st.session_state:
     st.session_state.rol = ""
 
-# --- PANTALLA DE LOGIN ---
+# --- INICIO DE SESIÓN ---
 if not st.session_state.autenticado:
-    st.title("🏪 Sistema Mi Bodega Pro")
-    st.subheader("Inicio de Sesión")
-    
+    st.title("🏪 Mi Bodega Pro")
+    st.subheader("Acceso al Sistema")
     with st.form("form_login"):
         usr_input = st.text_input("Usuario")
         pass_input = st.text_input("Contraseña", type="password")
-        btn_login = st.form_submit_button("Ingresar", type="primary")
-        
-        if btn_login:
+        if st.form_submit_button("Ingresar", type="primary"):
             res = ejecutar_sql(
                 "SELECT nombre, rol FROM usuarios WHERE nombre = ? AND clave = ?",
                 (usr_input.strip(), hash_clave(pass_input.strip())),
@@ -236,38 +266,19 @@ if not st.session_state.autenticado:
                 st.session_state.autenticado = True
                 st.session_state.usuario = res["nombre"]
                 st.session_state.rol = res["rol"]
-                st.success(f"Bienvenido {res['nombre']}")
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos.")
     st.stop()
 
-# --- BARRA LATERAL (SIDEBAR REDISEÑADA) ---
+# --- BARRA LATERAL (SIDEBAR ÚNICA Y MEJORADA) ---
 with st.sidebar:
-    st.markdown(f"### 👤 {st.session_state.usuario}")
-    st.caption(f"Rol: **{st.session_state.rol}**")
-    st.divider()
-
-    # Tasa BCV integrada
-    tasa_api = obtener_tasa_bcv_api()
-    tasa_bcv = st.number_input(
-        "💵 Tasa Oficial BCV (Bs/$)",
-        min_value=1.0,
-        value=float(tasa_api),
-        step=0.1,
-        help="Cargada automáticamente desde el BCV. Se puede modificar manualmente."
-    )
-    
-    if st.button("🔄 Actualizar Tasa BCV", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
-    st.divider()
-
-    # --- BARRA LATERAL (SIDEBAR) ---
-with st.sidebar:
-    st.markdown(f"👤 **{st.session_state.usuario}** ({st.session_state.rol})")
-    st.divider()
+    st.markdown(f"""
+    <div class="user-card">
+        <h4>👤 {st.session_state.usuario}</h4>
+        <p>Rol: <b>{st.session_state.rol}</b></p>
+    </div>
+    """, unsafe_allow_html=True)
 
     tasa_api = obtener_tasa_bcv_api()
     tasa_bcv = st.number_input(
@@ -275,13 +286,15 @@ with st.sidebar:
         min_value=1.0,
         value=float(tasa_api),
         step=0.10,
-        help="Obtenida automáticamente del BCV. Modificable manualmente."
+        help="Cargada automáticamente de la API del BCV."
     )
-    if st.button("🔄 Actualizar Tasa", use_container_width=True):
+    
+    if st.button("🔄 Actualizar Tasa BCV", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-    st.divider()
+    st.markdown("---")
+    st.markdown("<p style='color: #94a3b8; font-size: 0.8rem; font-weight: bold; margin-bottom: 5px;'>Navegación</p>", unsafe_allow_html=True)
 
     opciones_menu = [
         "📦 Productos / Inventario",
@@ -297,15 +310,84 @@ with st.sidebar:
         "⚙️ Gestión de Usuarios"
     ]
     
-    opcion_raw = st.radio("Menú Principal", opciones_menu)
+    opcion_raw = st.radio("Menú Principal", opciones_menu, label_visibility="collapsed")
     opcion = opcion_raw.split(" ", 1)[1]
 
-    st.divider()
+    st.markdown("---")
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
         st.session_state.autenticado = False
         st.session_state.usuario = ""
         st.session_state.rol = ""
         st.rerun()
+
+# ==========================================
+# MÓDULOS DE LA APLICACIÓN
+# ==========================================
+
+if opcion == "Productos / Inventario":
+    st.header("📦 Gestión de Inventario")
+    tab1, tab2 = st.tabs(["📋 Lista de Productos", "➕ Nuevo Producto"])
+    
+    with tab1:
+        conn = conectar_db()
+        df_prod = pd.read_sql_query("SELECT id, codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo FROM productos ORDER BY nombre ASC", conn)
+        conn.close()
+
+        if not df_prod.empty:
+            df_prod["precio_bs"] = df_prod["precio_usd"].astype(float) * tasa_bcv
+            df_prod["costo_bs"] = df_prod["costo_usd"].astype(float) * tasa_bcv
+            
+            st.dataframe(
+                df_prod[["codigo", "nombre", "categoria", "costo_usd", "costo_bs", "precio_usd", "precio_bs", "stock_actual", "stock_minimo"]],
+                use_container_width=True,
+                column_config={
+                    "codigo": "Código",
+                    "nombre": "Producto",
+                    "categoria": "Categoría",
+                    "costo_usd": st.column_config.NumberColumn("Costo ($)", format="$%.2f"),
+                    "costo_bs": st.column_config.NumberColumn("Costo (Bs)", format="Bs. %,.2f"),
+                    "precio_usd": st.column_config.NumberColumn("Precio ($)", format="$%.2f"),
+                    "precio_bs": st.column_config.NumberColumn("Precio (Bs)", format="Bs. %,.2f"),
+                    "stock_actual": "Stock Actual",
+                    "stock_minimo": "Stock Mínimo"
+                },
+                hide_index=True
+            )
+        else:
+            st.info("No hay productos registrados en el inventario.")
+
+    with tab2:
+        with st.form("form_prod", clear_on_submit=True):
+            c_cod, c_nom, c_cat = st.columns([1, 2, 1])
+            cod_p = c_cod.text_input("Código / SKU")
+            nom_p = c_nom.text_input("Nombre del Producto")
+            cat_p = c_cat.text_input("Categoría", value="General")
+            
+            c1, c2 = st.columns(2)
+            costo_p = c1.number_input("Costo USD ($)", min_value=0.01, step=0.5, value=1.0)
+            precio_p = c2.number_input("Precio Venta USD ($)", min_value=0.01, step=0.5, value=1.5)
+            
+            st.caption(f"💡 Equivalentes en Bolívares: Costo **{calculadora.usd_a_bs(costo_p, tasa_bcv):,.2f} Bs.** | Venta **{calculadora.usd_a_bs(precio_p, tasa_bcv):,.2f} Bs.**")
+
+            c3, c4 = st.columns(2)
+            stk_p = c3.number_input("Stock Inicial", min_value=0.0, step=1.0)
+            stk_min_p = c4.number_input("Stock Mínimo Alerta", min_value=1.0, value=5.0)
+            
+            if st.form_submit_button("Guardar Producto", type="primary"):
+                if nom_p.strip():
+                    try:
+                        ejecutar_sql("""
+                            INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (cod_p.strip(), nom_p.strip(), cat_p.strip(), precio_p, costo_p, stk_p, stk_min_p))
+                        st.success(f"✅ Producto **{nom_p}** guardado.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al guardar: {e}")
+
+elif opcion == "Registrar Venta":
+    st.header("🛒 Registrar Venta")
+    
 
 # ==========================================
 # MÓDULOS DE LA APLICACIÓN
