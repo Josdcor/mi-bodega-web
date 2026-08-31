@@ -3,6 +3,9 @@ import pandas as pd
 import sqlite3
 import hashlib
 from datetime import datetime
+import requests
+from bs4 import BeautifulSoup
+from streamlit_option_menu import option_menu
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -10,6 +13,38 @@ st.set_page_config(
     page_icon="🏪",
     layout="wide"
 )
+
+# --- CONSULTA AUTOMÁTICA TASA BCV ---
+@st.cache_data(ttl=3600)  # Guarda en caché por 1 hora
+def obtener_tasa_bcv_api():
+    """Obtiene la tasa oficial del BCV desde API pública o scraping directo"""
+    # Intentar API 1: pyDolarVenezuela pública
+    try:
+        res = requests.get("https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv", timeout=5)
+        if res.status_code == 200:
+            datos = res.json()
+            # Buscar el valor de la moneda USD
+            if "monedas" in datos and "usd" in datos["monedas"]:
+                return float(datos["monedas"]["usd"]["promedio"])
+            elif "price" in datos:
+                return float(datos["price"])
+    except Exception:
+        pass
+
+    # Fallback: Scraping directo a la página principal del BCV
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get("https://www.bcv.org.ve/", headers=headers, timeout=5, verify=False)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.content, 'html.parser')
+            div_usd = soup.find('div', id='dolar')
+            if div_usd:
+                valor_str = div_usd.find('strong').text.strip().replace(',', '.')
+                return float(valor_str)
+    except Exception:
+        pass
+
+    return 60.0  # Valor por defecto si no hay conexión
 
 # --- CLASE CALCULADORA Y AUXILIARES ---
 class CalculadoraTasa:
@@ -32,14 +67,10 @@ def conectar_db():
     conn.row_factory = sqlite3.Row
     return conn
 
-def es_postgres():
-    return False
-
 def inicializar_db():
     conn = conectar_db()
     cursor = conn.cursor()
     
-    # Tabla Usuarios
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +80,6 @@ def inicializar_db():
         )
     """)
     
-    # Tabla Productos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +93,6 @@ def inicializar_db():
         )
     """)
 
-    # Tabla Clientes
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +102,6 @@ def inicializar_db():
         )
     """)
 
-    # Tabla Ventas
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +119,6 @@ def inicializar_db():
         )
     """)
 
-    # Tabla Abonos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS abonos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,7 +132,6 @@ def inicializar_db():
         )
     """)
 
-    # Tabla Gastos
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS gastos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,7 +143,6 @@ def inicializar_db():
         )
     """)
 
-    # Tabla Movimientos (Kárdex)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS movimientos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,7 +154,6 @@ def inicializar_db():
         )
     """)
 
-    # Tabla Cierres
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS cierres (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,7 +166,6 @@ def inicializar_db():
         )
     """)
 
-    # Crear Usuario Admin por Defecto si no existe
     cursor.execute("SELECT COUNT(*) FROM usuarios")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
@@ -204,39 +227,75 @@ if not st.session_state.autenticado:
                 st.error("Usuario o contraseña incorrectos.")
     st.stop()
 
-# --- BARRA LATERAL (SIDEBAR) ---
-st.sidebar.title(f"👤 {st.session_state.usuario} ({st.session_state.rol})")
-tasa_bcv = st.sidebar.number_input("Tasa BCV (Bs/$)", min_value=1.0, value=60.0, step=0.5)
+# --- BARRA LATERAL (SIDEBAR REDISEÑADA) ---
+with st.sidebar:
+    st.markdown(f"### 👤 {st.session_state.usuario}")
+    st.caption(f"Rol: **{st.session_state.rol}**")
+    st.divider()
 
-opcion = st.sidebar.radio("Menú Principal", [
-    "📦 Productos / Inventario",
-    "🛒 Registrar Venta",
-    "👥 Clientes y Créditos",
-    "💳 Abonos",
-    "🔒 Cierre de Caja",
-    "🔴 Anulación de Ventas",
-    "📊 Dashboard",
-    "🧮 Calculadora",
-    "💸 Gastos / Caja Chica",
-    "📜 Historial y Transacciones",
-    "⚙️ Gestión de Usuarios"
-])
+    # Tasa BCV integrada
+    tasa_api = obtener_tasa_bcv_api()
+    tasa_bcv = st.number_input(
+        "💵 Tasa Oficial BCV (Bs/$)",
+        min_value=1.0,
+        value=float(tasa_api),
+        step=0.1,
+        help="Cargada automáticamente desde el BCV. Se puede modificar manualmente."
+    )
+    
+    if st.button("🔄 Actualizar Tasa BCV", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
-if st.sidebar.button("Cerrar Sesión"):
-    st.session_state.autenticado = False
-    st.session_state.usuario = ""
-    st.session_state.rol = ""
-    st.rerun()
+    st.divider()
+
+    # Menú elegante con option_menu
+    opcion = option_menu(
+        menu_title="Menú Principal",
+        options=[
+            "Productos / Inventario",
+            "Registrar Venta",
+            "Clientes y Créditos",
+            "Abonos",
+            "Cierre de Caja",
+            "Anulación de Ventas",
+            "Dashboard",
+            "Calculadora",
+            "Gastos / Caja Chica",
+            "Historial y Transacciones",
+            "Gestión de Usuarios"
+        ],
+        icons=[
+            "box-seam", "cart-check", "people", "credit-card", 
+            "lock", "x-circle", "bar-chart-line", "calculator", 
+            "cash-coin", "receipt", "gear"
+        ],
+        menu_icon="building-store",
+        default_index=0,
+        styles={
+            "container": {"padding": "0!important", "background-color": "transparent"},
+            "icon": {"color": "#4dabf7", "font-size": "16px"}, 
+            "nav-link": {"font-size": "14px", "text-align": "left", "margin": "2px", "--hover-color": "#2b303b"},
+            "nav-link-selected": {"background-color": "#1c7ed6"},
+        }
+    )
+
+    st.divider()
+    if st.button("🚪 Cerrar Sesión", use_container_width=True):
+        st.session_state.autenticado = False
+        st.session_state.usuario = ""
+        st.session_state.rol = ""
+        st.rerun()
 
 # ==========================================
 # MÓDULOS DE LA APLICACIÓN
 # ==========================================
 
 # MÓDULO 1: PRODUCTOS / INVENTARIO
-if opcion == "📦 Productos / Inventario":
+if opcion == "Productos / Inventario":
     st.header("📦 Gestión de Inventario y Productos")
     
-    tab_p1, tab_p2 = st.tabs(["Lista de Productos", "➕ Registrar Nuevo Producto"])
+    tab_p1, tab_p2 = st.tabs(["📋 Lista de Productos", "➕ Registrar Nuevo Producto"])
     
     with tab_p1:
         conn = conectar_db()
@@ -246,12 +305,21 @@ if opcion == "📦 Productos / Inventario":
             conn.close()
 
         if not df_prod.empty:
+            # Calcular columna dinámica en Bolívares
+            df_prod["precio_bs"] = df_prod["precio_usd"].astype(float) * tasa_bcv
+            df_prod["costo_bs"] = df_prod["costo_usd"].astype(float) * tasa_bcv
+            
             st.dataframe(
-                df_prod,
+                df_prod[["codigo", "nombre", "categoria", "costo_usd", "costo_bs", "precio_usd", "precio_bs", "stock_actual", "stock_minimo"]],
                 use_container_width=True,
                 column_config={
-                    "precio_usd": st.column_config.NumberColumn("Precio USD", format="$%.2f"),
-                    "costo_usd": st.column_config.NumberColumn("Costo USD", format="$%.2f"),
+                    "codigo": "Código",
+                    "nombre": "Producto",
+                    "categoria": "Categoría",
+                    "costo_usd": st.column_config.NumberColumn("Costo ($)", format="$%.2f"),
+                    "costo_bs": st.column_config.NumberColumn("Costo (Bs)", format="Bs. %,.2f"),
+                    "precio_usd": st.column_config.NumberColumn("Precio Venta ($)", format="$%.2f"),
+                    "precio_bs": st.column_config.NumberColumn("Precio Venta (Bs)", format="Bs. %,.2f"),
                     "stock_actual": st.column_config.NumberColumn("Stock Actual"),
                     "stock_minimo": st.column_config.NumberColumn("Stock Mínimo")
                 },
@@ -262,15 +330,22 @@ if opcion == "📦 Productos / Inventario":
 
     with tab_p2:
         with st.form("form_reg_producto", clear_on_submit=True):
-            cod_p = st.text_input("Código de Barras / SKU")
-            nom_p = st.text_input("Nombre del Producto")
-            cat_p = st.text_input("Categoría", value="General")
-            c1, c2 = st.columns(2)
-            costo_p = c1.number_input("Costo USD ($)", min_value=0.01, step=0.5)
-            precio_p = c2.number_input("Precio Venta USD ($)", min_value=0.01, step=0.5)
-            c3, c4 = st.columns(2)
-            stk_p = c3.number_input("Stock Inicial", min_value=0.0, step=1.0)
-            stk_min_p = c4.number_input("Stock Mínimo Alerta", min_value=1.0, value=5.0, step=1.0)
+            c_cod, c_nom, c_cat = st.columns([1, 2, 1])
+            cod_p = c_cod.text_input("Código de Barras / SKU")
+            nom_p = c_nom.text_input("Nombre del Producto")
+            cat_p = c_cat.text_input("Categoría", value="General")
+            
+            st.markdown("##### 💵 Costos y Precios (Cálculo Automático USD ↔ Bs)")
+            c1, c2, c3, c4 = st.columns(4)
+            costo_p = c1.number_input("Costo USD ($)", min_value=0.01, step=0.5, value=1.0)
+            costo_bs = c2.number_input("Costo Bs (Equiv.)", value=calculadora.usd_a_bs(costo_p, tasa_bcv), disabled=True)
+            
+            precio_p = c3.number_input("Precio Venta USD ($)", min_value=0.01, step=0.5, value=1.5)
+            precio_bs = c4.number_input("Precio Venta Bs (Equiv.)", value=calculadora.usd_a_bs(precio_p, tasa_bcv), disabled=True)
+            
+            c5, c6 = st.columns(2)
+            stk_p = c5.number_input("Stock Inicial", min_value=0.0, step=1.0)
+            stk_min_p = c6.number_input("Stock Mínimo Alerta", min_value=1.0, value=5.0, step=1.0)
             
             if st.form_submit_button("Guardar Producto", type="primary"):
                 if nom_p.strip():
@@ -279,7 +354,7 @@ if opcion == "📦 Productos / Inventario":
                             INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                         """, (cod_p.strip(), nom_p.strip(), cat_p.strip(), precio_p, costo_p, stk_p, stk_min_p))
-                        st.success(f"✅ Producto **{nom_p}** registrado exitosamente.")
+                        st.success(f"✅ Producto **{nom_p}** registrado exitosamente a **${precio_p:.2f}** ({calculadora.usd_a_bs(precio_p, tasa_bcv):,.2f} Bs.)")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error al registrar producto: {e}")
@@ -287,11 +362,10 @@ if opcion == "📦 Productos / Inventario":
                     st.warning("Ingrese un nombre válido para el producto.")
 
 # MÓDULO 2: REGISTRAR VENTA
-elif opcion == "🛒 Registrar Venta":
+elif opcion == "Registrar Venta":
     st.header("🛒 Registrar Nueva Venta")
     
-    # Campo de búsqueda dinámica
-    busqueda = st.text_input("🔍 Buscar Producto por Nombre, Código o Categoría", placeholder="Ej: 750123..., Arroz, Lacteos...").strip().lower()
+    busqueda = st.text_input("🔍 Buscar Producto por Nombre, Código o Categoría", placeholder="Ej: 750123..., Arroz, Lácteos...").strip().lower()
 
     conn = conectar_db()
     try:
@@ -303,7 +377,6 @@ elif opcion == "🛒 Registrar Venta":
     if df_p.empty:
         st.warning("⚠️ No hay productos disponibles con stock en el inventario.")
     else:
-        # Filtrar el dataframe según el texto ingresado en el buscador
         if busqueda:
             df_p['codigo_str'] = df_p['codigo'].fillna('').astype(str).str.lower()
             df_p['nombre_str'] = df_p['nombre'].fillna('').astype(str).str.lower()
@@ -318,12 +391,13 @@ elif opcion == "🛒 Registrar Venta":
         if df_p.empty:
             st.error(f"❌ No se encontraron productos que coincidan con '{busqueda}'.")
         else:
-            # Crear las opciones con formato claro: [Código] Nombre (Categoría) - Stock - Precio
             opciones_prod = {}
             for _, row in df_p.iterrows():
+                p_usd = float(row['precio_usd'])
+                p_bs = calculadora.usd_a_bs(p_usd, tasa_bcv)
                 cod_str = f"[{row['codigo']}] " if row['codigo'] else ""
                 cat_str = f" ({row['categoria']})" if row['categoria'] else ""
-                label = f"{cod_str}{row['nombre']}{cat_str} | Stock: {row['stock_actual']} | ${float(row['precio_usd']):.2f}"
+                label = f"{cod_str}{row['nombre']}{cat_str} | Stock: {row['stock_actual']} | ${p_usd:.2f} / {p_bs:,.2f} Bs."
                 opciones_prod[label] = row
 
             prod_sel_key = st.selectbox("Seleccionar Producto Encontrado", list(opciones_prod.keys()))
@@ -357,8 +431,8 @@ elif opcion == "🛒 Registrar Venta":
             
             st.divider()
             col_v1, col_v2 = st.columns(2)
-            col_v1.metric("Total USD", f"${total_usd:.2f}")
-            col_v2.metric("Total Bs", f"{total_bs:,.2f} Bs.")
+            col_v1.metric("Total USD ($)", f"${total_usd:.2f}")
+            col_v2.metric("Total Bs.", f"{total_bs:,.2f} Bs.")
             
             if st.button("🛒 Procesar Venta", type="primary", use_container_width=True):
                 if es_credito and not cliente_id:
@@ -390,6 +464,7 @@ elif opcion == "🛒 Registrar Venta":
                                 "================================\n"
                                 f"Comprobante: {num_fact}\n"
                                 f"Fecha: {fecha_actual}\n"
+                                f"Tasa BCV: {tasa_bcv:.2f} Bs/$\n"
                                 f"Cajero: {st.session_state.usuario}\n"
                                 "--------------------------------\n"
                                 f"Producto: {prod_sel['nombre']}\n"
@@ -412,9 +487,9 @@ elif opcion == "🛒 Registrar Venta":
                             st.error(f"❌ Error al procesar la transacción: {e}")
                     else:
                         st.error("❌ Stock insuficiente para realizar la venta.")
-                        
+
 # MÓDULO 3: CLIENTES Y CRÉDITOS
-elif opcion == "👥 Clientes y Créditos":
+elif opcion == "Clientes y Créditos":
     st.header("👥 Gestión de Clientes")
     
     with st.form("form_cliente", clear_on_submit=True):
@@ -439,8 +514,8 @@ elif opcion == "👥 Clientes y Créditos":
         conn.close()
     st.dataframe(df_cli, use_container_width=True, hide_index=True)
 
-# MÓDULO 4: ABONOS (FIADOS)
-elif opcion == "💳 Abonos":
+# MÓDULO 4: ABONOS
+elif opcion == "Abonos":
     st.header("💳 Abonos de Clientes (Fiados)")
     
     conn = conectar_db()
@@ -465,42 +540,41 @@ elif opcion == "💳 Abonos":
             
         v_cred = float(res_v['total'].iloc[0]) if not res_v.empty and res_v['total'].iloc[0] is not None else 0.0
         v_abo = float(res_a['total'].iloc[0]) if not res_a.empty and res_a['total'].iloc[0] is not None else 0.0
-        deuda = v_cred - v_abo
+        deuda_usd = v_cred - v_abo
+        deuda_bs = calculadora.usd_a_bs(deuda_usd, tasa_bcv)
         
-        st.info(f"Deuda Actual de **{cliente_sel}**: **${deuda:.2f} USD**")
+        st.info(f"Deuda Actual de **{cliente_sel}**: **${deuda_usd:.2f} USD** / **{deuda_bs:,.2f} Bs.**")
 
-        if deuda > 0:
+        if deuda_usd > 0:
             with st.form("form_abono", clear_on_submit=True):
-                monto_abono = st.number_input("Monto Abono ($)", min_value=0.01, max_value=float(deuda), step=1.0)
+                monto_abono = st.number_input("Monto Abono ($)", min_value=0.01, max_value=float(deuda_usd), step=1.0)
+                monto_abono_bs = calculadora.usd_a_bs(monto_abono, tasa_bcv)
+                st.caption(f"Equivalente a pagar: **{monto_abono_bs:,.2f} Bs.**")
+                
                 metodo_abono = st.selectbox("Método de Pago", ["Efectivo USD", "Pago Móvil", "Transferencia Bs", "Zelle"])
                 nota_abono = st.text_input("Nota / Referencia (Opcional)")
                 
                 if st.form_submit_button("Registrar Abono", type="primary"):
                     fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    monto_bs = calculadora.usd_a_bs(monto_abono, tasa_bcv)
                     
                     ejecutar_sql("""
                         INSERT INTO abonos (cliente_id, monto_usd, monto_bs, metodo_pago, nota, fecha, responsable)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (c_id, monto_abono, monto_bs, metodo_abono, nota_abono.strip(), fecha, st.session_state.usuario))
+                    """, (c_id, monto_abono, monto_abono_bs, metodo_abono, nota_abono.strip(), fecha, st.session_state.usuario))
                     
-                    st.success(f"✅ Abono de ${monto_abono:.2f} guardado para {cliente_sel}.")
+                    st.success(f"✅ Abono de ${monto_abono:.2f} ({monto_abono_bs:,.2f} Bs.) guardado para {cliente_sel}.")
                     st.rerun()
         else:
             st.success("🎉 Este cliente no posee deudas pendientes.")
 
 # MÓDULO 5: CIERRE DE CAJA
-elif opcion == "🔒 Cierre de Caja":
+elif opcion == "Cierre de Caja":
     st.header("🔒 Cierre de Caja Diario")
     
     conn = conectar_db()
     try:
-        if es_postgres():
-            q_v = "SELECT total_usd, total_bs FROM ventas WHERE fecha::date = CURRENT_DATE AND estado = 'Completada'"
-            q_g = "SELECT monto FROM gastos WHERE fecha::date = CURRENT_DATE"
-        else:
-            q_v = "SELECT total_usd, total_bs FROM ventas WHERE DATE(fecha) = DATE('now') AND estado = 'Completada'"
-            q_g = "SELECT monto FROM gastos WHERE DATE(fecha) = DATE('now')"
+        q_v = "SELECT total_usd, total_bs FROM ventas WHERE DATE(fecha) = DATE('now') AND estado = 'Completada'"
+        q_g = "SELECT monto FROM gastos WHERE DATE(fecha) = DATE('now')"
             
         ventas_hoy = pd.read_sql_query(q_v, conn)
         gastos_hoy = pd.read_sql_query(q_g, conn)
@@ -510,13 +584,15 @@ elif opcion == "🔒 Cierre de Caja":
     tot_ventas_usd = float(ventas_hoy['total_usd'].sum()) if not ventas_hoy.empty else 0.0
     tot_ventas_bs = float(ventas_hoy['total_bs'].sum()) if not ventas_hoy.empty else 0.0
     tot_gastos_usd = float(gastos_hoy['monto'].sum()) if not gastos_hoy.empty else 0.0
-    saldo_neto = tot_ventas_usd - tot_gastos_usd
+    tot_gastos_bs = calculadora.usd_a_bs(tot_gastos_usd, tasa_bcv)
+    saldo_neto_usd = tot_ventas_usd - tot_gastos_usd
+    saldo_neto_bs = calculadora.usd_a_bs(saldo_neto_usd, tasa_bcv)
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Ventas Totales ($)", f"${tot_ventas_usd:.2f}")
-    col2.metric("Ventas Totales (Bs)", f"{tot_ventas_bs:,.2f} Bs.")
-    col3.metric("Gastos Totales ($)", f"${tot_gastos_usd:.2f}")
-    col4.metric("Saldo Neto ($)", f"${saldo_neto:.2f}")
+    col1.metric("Ventas Totales ($)", f"${tot_ventas_usd:.2f}", f"{tot_ventas_bs:,.2f} Bs.")
+    col2.metric("Gastos Totales ($)", f"${tot_gastos_usd:.2f}", f"{tot_gastos_bs:,.2f} Bs.")
+    col3.metric("Saldo Neto ($)", f"${saldo_neto_usd:.2f}", f"{saldo_neto_bs:,.2f} Bs.")
+    col4.metric("Tasa Aplicada", f"{tasa_bcv:.2f} Bs/$")
     
     st.divider()
     if st.button("Ejecutar Cierre de Caja de Hoy", type="primary"):
@@ -524,17 +600,17 @@ elif opcion == "🔒 Cierre de Caja":
         ejecutar_sql("""
             INSERT INTO cierres (fecha, total_ventas_usd, total_ventas_bs, total_gastos_usd, saldo_neto_usd, responsable)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (fecha_cierre, tot_ventas_usd, tot_ventas_bs, tot_gastos_usd, saldo_neto, st.session_state.usuario))
+        """, (fecha_cierre, tot_ventas_usd, tot_ventas_bs, tot_gastos_usd, saldo_neto_usd, st.session_state.usuario))
         st.success(f"✅ Cierre diario registrado por **{st.session_state.usuario}**.")
 
 # MÓDULO 6: ANULACIÓN DE VENTAS
-elif opcion == "🔴 Anulación de Ventas":
+elif opcion == "Anulación de Ventas":
     st.header("🔴 Anulación de Ventas")
     
     conn = conectar_db()
     try:
         ventas_df = pd.read_sql_query("""
-            SELECT v.id, v.num_factura, p.nombre AS producto, v.producto_id, v.cantidad, v.total_usd, v.fecha 
+            SELECT v.id, v.num_factura, p.nombre AS producto, v.producto_id, v.cantidad, v.total_usd, v.total_bs, v.fecha 
             FROM ventas v 
             LEFT JOIN productos p ON v.producto_id = p.id 
             WHERE v.estado = 'Completada' ORDER BY v.id DESC LIMIT 50
@@ -546,7 +622,7 @@ elif opcion == "🔴 Anulación de Ventas":
         st.info("No hay ventas activas disponibles para anular.")
     else:
         opciones_ventas = {
-            f"{row['num_factura']} | {row['producto']} ({row['cantidad']} unid) - ${float(row['total_usd']):.2f}": row 
+            f"{row['num_factura']} | {row['producto']} ({row['cantidad']} unid) - ${float(row['total_usd']):.2f} / {float(row['total_bs']):,.2f} Bs.": row 
             for _, row in ventas_df.iterrows()
         }
         sel_v = st.selectbox("Seleccione la venta a anular", list(opciones_ventas.keys()))
@@ -569,12 +645,12 @@ elif opcion == "🔴 Anulación de Ventas":
                 st.error(f"Error al procesar la anulación: {e}")
 
 # MÓDULO 7: DASHBOARD
-elif opcion == "📊 Dashboard":
+elif opcion == "Dashboard":
     st.header("📊 Dashboard del Negocio")
     
     conn = conectar_db()
     try:
-        df_v = pd.read_sql_query("SELECT total_usd, fecha FROM ventas WHERE estado = 'Completada'", conn)
+        df_v = pd.read_sql_query("SELECT total_usd, total_bs, fecha FROM ventas WHERE estado = 'Completada'", conn)
         df_p = pd.read_sql_query("SELECT nombre, stock_actual FROM productos ORDER BY stock_actual ASC", conn)
     finally:
         conn.close()
@@ -596,10 +672,9 @@ elif opcion == "📊 Dashboard":
         else:
             st.info("Sin historial de ventas.")
 
-# MÓDULO 8: CALCULADORA DE PRECIOS POR UNIDAD
-elif opcion == "🧮 Calculadora":
-    st.header("🧮 Calculadora de Costos y Precio de Venta por Unidad")
-    st.caption("Determina el costo real por unidad incluyendo gastos operativos y aplicando el margen de ganancia deseado.")
+# MÓDULO 8: CALCULADORA
+elif opcion == "Calculadora":
+    st.header("🧮 Calculadora de Costos y Precio por Unidad")
     
     col_calc1, col_calc2 = st.columns(2)
     
@@ -607,11 +682,11 @@ elif opcion == "🧮 Calculadora":
         st.subheader("📦 Datos de Compra al Mayor")
         costo_bulto_usd = st.number_input("Costo del Bulto / Saco / Caja ($)", min_value=0.01, value=18.00, step=1.0)
         unidades_por_bulto = st.number_input("Cantidad de Unidades por Bulto", min_value=1.0, value=20.0, step=1.0)
-        gastos_adicionales_usd = st.number_input("Gastos Adicionales (Flete, Pasajes) ($)", min_value=0.00, value=2.00, step=0.50)
+        gastos_adicionales_usd = st.number_input("Gastos Adicionales (Flete) ($)", min_value=0.00, value=2.00, step=0.50)
         
     with col_calc2:
-        st.subheader("📈 Margen de Ganancia e Impuestos")
-        opcion_ganancia = st.radio("Seleccionar % de Ganancia", ["20%", "30%", "40%", "Otro %"], index=1, horizontal=True)
+        st.subheader("📈 Margen de Ganancia")
+        opcion_ganancia = st.radio("Ganancia Deseada", ["20%", "30%", "40%", "Otro %"], index=1, horizontal=True)
         
         if opcion_ganancia == "20%":
             pct_ganancia = 20.0
@@ -622,68 +697,26 @@ elif opcion == "🧮 Calculadora":
         else:
             pct_ganancia = st.number_input("Porcentaje Personalizado (%)", min_value=0.0, value=35.0, step=1.0)
 
-        incluir_iva = st.checkbox("¿Incluir IVA / Impuesto (16%) en el costo base?")
-        pct_iva = 16.0 if incluir_iva else 0.0
-
-    st.divider()
-
     costo_total_compra = costo_bulto_usd + gastos_adicionales_usd
     costo_base_unidad = costo_total_compra / unidades_por_bulto
-    
-    if incluir_iva:
-        costo_base_unidad += (costo_base_unidad * (pct_iva / 100.0))
-
     precio_venta_unidad_usd = costo_base_unidad * (1.0 + (pct_ganancia / 100.0))
     precio_venta_unidad_bs = calculadora.usd_a_bs(precio_venta_unidad_usd, tasa_bcv)
-    ganancia_neta_unidad = precio_venta_unidad_usd - costo_base_unidad
-    ganancia_neta_bulto = ganancia_neta_unidad * unidades_por_bulto
 
-    st.subheader("📊 Desglose de Resultados")
-    res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+    st.divider()
+    st.subheader("📊 Resultados por Unidad")
+    res_col1, res_col2, res_col3 = st.columns(3)
     res_col1.metric("Costo Real u. ($)", f"${costo_base_unidad:.2f}")
     res_col2.metric("Precio Venta u. ($)", f"${precio_venta_unidad_usd:.2f}")
     res_col3.metric("Precio Venta u. (Bs)", f"{precio_venta_unidad_bs:,.2f} Bs.")
-    res_col4.metric("Ganancia Bulto ($)", f"${ganancia_neta_bulto:.2f}")
-
-    st.info(f"💡 **Resumen:** Comprando el bulto a **${costo_bulto_usd:.2f}** con **${gastos_adicionales_usd:.2f}** en gastos, cada una de las **{int(unidades_por_bulto)}** unidades te cuesta **${costo_base_unidad:.2f}**. Vendiendo cada unidad a **${precio_venta_unidad_usd:.2f}** ({precio_venta_unidad_bs:,.2f} Bs.), ganas **${ganancia_neta_unidad:.2f}** por unidad ({pct_ganancia}% margen).")
-
-    st.divider()
-    st.subheader("📥 Cargar Resultado Directo al Inventario")
-    
-    with st.form("form_cargar_inv"):
-        nom_prod = st.text_input("Nombre del Producto", placeholder="Ej: Arroz Primor 1Kg")
-        cod_prod = st.text_input("Código de Barras (Opcional)")
-        cat_prod = st.text_input("Categoría", value="Abarrotes")
-        stk_inicial = st.number_input("Stock a Agregar (Unidades)", min_value=1.0, value=unidades_por_bulto, step=1.0)
-        
-        if st.form_submit_button("💾 Guardar / Actualizar en Inventario", type="primary"):
-            if not nom_prod.strip():
-                st.warning("Ingrese un nombre de producto válido.")
-            else:
-                prod_existente = ejecutar_sql("SELECT id, stock_actual FROM productos WHERE LOWER(nombre) = LOWER(?)", (nom_prod.strip(),), fetch="one")
-                
-                if prod_existente:
-                    nuevo_stock = float(prod_existente[1]) + stk_inicial
-                    ejecutar_sql("""
-                        UPDATE productos 
-                        SET precio_usd = ?, costo_usd = ?, stock_actual = ?
-                        WHERE id = ?
-                    """, (round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), nuevo_stock, int(prod_existente[0])))
-                    st.success(f"✅ Producto **{nom_prod}** actualizado. Nuevo precio: **${precio_venta_unidad_usd:.2f}**, Stock total: **{nuevo_stock}** unid.")
-                else:
-                    ejecutar_sql("""
-                        INSERT INTO productos (codigo, nombre, categoria, precio_usd, costo_usd, stock_actual, stock_minimo)
-                        VALUES (?, ?, ?, ?, ?, ?, 5.0)
-                    """, (cod_prod.strip(), nom_prod.strip(), cat_prod.strip(), round(precio_venta_unidad_usd, 2), round(costo_base_unidad, 2), stk_inicial))
-                    st.success(f"✅ Producto **{nom_prod}** creado en inventario a **${precio_venta_unidad_usd:.2f}** con **{stk_inicial}** unid.")
 
 # MÓDULO 9: GASTOS / CAJA CHICA
-elif opcion == "💸 Gastos / Caja Chica":
+elif opcion == "Gastos / Caja Chica":
     st.header("💸 Gastos Operativos")
     
     with st.form("form_gasto_cc", clear_on_submit=True):
-        desc = st.text_input("Descripción del Gasto", placeholder="Ej: Compra de bolsas, pago de transporte")
+        desc = st.text_input("Descripción del Gasto", placeholder="Ej: Pago flete, bolsas plasticas")
         monto = st.number_input("Monto ($)", min_value=0.01, step=0.50)
+        st.caption(f"Equivalente a tasa oficial: **{calculadora.usd_a_bs(monto, tasa_bcv):,.2f} Bs.**")
         
         if st.form_submit_button("Guardar Gasto", type="primary"):
             if desc.strip():
@@ -694,8 +727,6 @@ elif opcion == "💸 Gastos / Caja Chica":
                 )
                 st.success("✅ Gasto registrado con éxito.")
                 st.rerun()
-            else:
-                st.warning("Debe ingresar una descripción para el gasto.")
 
     st.subheader("📋 Historial de Gastos")
     conn = conectar_db()
@@ -705,20 +736,20 @@ elif opcion == "💸 Gastos / Caja Chica":
         conn.close()
 
     if not df_g.empty:
+        df_g["monto_bs"] = df_g["monto"].astype(float) * tasa_bcv
         st.dataframe(
             df_g,
             use_container_width=True,
             column_config={
-                "monto": st.column_config.NumberColumn("Monto", format="$%.2f"),
+                "monto": st.column_config.NumberColumn("Monto ($)", format="$%.2f"),
+                "monto_bs": st.column_config.NumberColumn("Monto (Bs)", format="Bs. %,.2f"),
                 "fecha": st.column_config.DatetimeColumn("Fecha", format="DD/MM/YYYY HH:mm")
             },
             hide_index=True
         )
-    else:
-        st.info("No hay gastos registrados.")
 
 # MÓDULO 10: HISTORIAL Y TRANSACCIONES
-elif opcion == "📜 Historial y Transacciones":
+elif opcion == "Historial y Transacciones":
     st.header("📜 Historial General de Transacciones")
     
     conn = conectar_db()
@@ -757,17 +788,15 @@ elif opcion == "📜 Historial y Transacciones":
             },
             hide_index=True
         )
-    else:
-        st.info("No hay registro de transacciones en la base de datos.")
 
 # MÓDULO 11: GESTIÓN DE USUARIOS
-elif opcion == "⚙️ Gestión de Usuarios":
+elif opcion == "Gestión de Usuarios":
     st.header("⚙️ Administración de Usuarios")
     
     if st.session_state.get("rol") not in ["Admin", "SuperAdmin"]:
-        st.error("🔒 No tienes permisos de administración para acceder a esta sección.")
+        st.error("🔒 No tienes permisos para acceder a este módulo.")
     else:
-        tab_u1, tab_u2, tab_u3, tab_u4 = st.tabs(["📋 Lista de Usuarios", "➕ Crear Usuario", "🔑 Cambiar Clave", "🗑️ Eliminar Usuario"])
+        tab_u1, tab_u2 = st.tabs(["📋 Lista de Usuarios", "➕ Crear Usuario"])
         
         with tab_u1:
             conn = conectar_db()
@@ -778,70 +807,16 @@ elif opcion == "⚙️ Gestión de Usuarios":
             st.dataframe(df_u, use_container_width=True, hide_index=True)
             
         with tab_u2:
-            st.subheader("➕ Registrar Nuevo Usuario")
             with st.form("form_u", clear_on_submit=True):
                 n_usr = st.text_input("Nombre de Usuario")
                 c_usr = st.text_input("Contraseña", type="password")
-                r_usr = st.selectbox("Rol de Acceso", ["Cajero", "Admin", "SuperAdmin"])
+                r_usr = st.selectbox("Rol", ["Cajero", "Admin", "SuperAdmin"])
                 
                 if st.form_submit_button("Crear Usuario", type="primary"):
                     if n_usr.strip() and c_usr.strip():
                         try:
-                            ejecutar_sql(
-                                "INSERT INTO usuarios (nombre, clave, rol) VALUES (?, ?, ?)", 
-                                (n_usr.strip(), hash_clave(c_usr.strip()), r_usr)
-                            )
-                            st.success(f"✅ Usuario **{n_usr.strip()}** creado exitosamente.")
+                            ejecutar_sql("INSERT INTO usuarios (nombre, clave, rol) VALUES (?, ?, ?)", (n_usr.strip(), hash_clave(c_usr.strip()), r_usr))
+                            st.success(f"✅ Usuario **{n_usr.strip()}** creado.")
                             st.rerun()
                         except Exception:
-                            st.error("❌ El nombre de usuario ya existe o ocurrió un problema con la base de datos.")
-                    else:
-                        st.warning("Debe ingresar un nombre de usuario y contraseña válidos.")
-
-        with tab_u3:
-            st.subheader("🔑 Cambiar Contraseña")
-            conn = conectar_db()
-            try:
-                usrs_df = pd.read_sql_query("SELECT id, nombre FROM usuarios", conn)
-            finally:
-                conn.close()
-            
-            if not usrs_df.empty:
-                with st.form("form_cambiar_clave", clear_on_submit=True):
-                    usr_sel_clave = st.selectbox("Seleccionar Usuario", usrs_df['nombre'].tolist())
-                    nueva_clave = st.text_input("Nueva Contraseña", type="password")
-                    
-                    if st.form_submit_button("Actualizar Contraseña", type="primary"):
-                        if nueva_clave.strip():
-                            clave_encriptada = hash_clave(nueva_clave.strip())
-                            ejecutar_sql(
-                                "UPDATE usuarios SET clave = ? WHERE nombre = ?", 
-                                (clave_encriptada, usr_sel_clave.strip())
-                            )
-                            st.success(f"✅ Contraseña del usuario **{usr_sel_clave}** actualizada.")
-                        else:
-                            st.warning("Ingrese una contraseña válida (no puede estar vacía).")
-
-        with tab_u4:
-            st.subheader("🗑️ Eliminar Usuario")
-            conn = conectar_db()
-            try:
-                usrs_df_del = pd.read_sql_query("SELECT id, nombre, rol FROM usuarios", conn)
-            finally:
-                conn.close()
-            
-            if not usrs_df_del.empty:
-                usrs_filtrados = usrs_df_del[usrs_df_del['nombre'] != st.session_state.usuario]
-                if st.session_state.rol == "Admin":
-                    usrs_filtrados = usrs_filtrados[usrs_filtrados['rol'] != "SuperAdmin"]
-                
-                if usrs_filtrados.empty:
-                    st.info("No hay otros usuarios disponibles que pueda eliminar.")
-                else:
-                    usr_sel_del = st.selectbox("Seleccionar Usuario a Eliminar", usrs_filtrados['nombre'].tolist(), key="sel_usr_del")
-                    st.warning(f"⚠️ **Atención:** Esta acción borrará permanentemente al usuario **{usr_sel_del}**.")
-                    
-                    if st.button("🗑️ Eliminar Usuario Definitivamente", type="primary", key="btn_del_usr"):
-                        ejecutar_sql("DELETE FROM usuarios WHERE nombre = ?", (usr_sel_del,))
-                        st.success(f"✅ Usuario **{usr_sel_del}** eliminado.")
-                        st.rerun()
+                            st.error("❌ El usuario ya existe.")
