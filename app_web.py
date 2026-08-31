@@ -264,39 +264,41 @@ with st.sidebar:
 
     st.divider()
 
-    # Menú elegante con option_menu
-    opcion = option_menu(
-        menu_title="Menú Principal",
-        opciones_menu = [
-    "📦 Productos / Inventario",
-    "🛒 Registrar Venta",
-    "👥 Clientes y Créditos",
-    "💳 Abonos",
-    "🔒 Cierre de Caja",
-    "🔴 Anulación de Ventas",
-    "📊 Dashboard",
-    "🧮 Calculadora",
-    "💸 Gastos / Caja Chica",
-    "📜 Historial y Transacciones",
-    "⚙️ Gestión de Usuarios"
-]
+    # --- BARRA LATERAL (SIDEBAR) ---
+with st.sidebar:
+    st.markdown(f"👤 **{st.session_state.usuario}** ({st.session_state.rol})")
+    st.divider()
 
-opcion_raw = st.radio("Menú Principal", opciones_menu)
-opcion = opcion_raw.split(" ", 1)[1]
-        icons=[
-            "box-seam", "cart-check", "people", "credit-card", 
-            "lock", "x-circle", "bar-chart-line", "calculator", 
-            "cash-coin", "receipt", "gear"
-        ],
-        menu_icon="building-store",
-        default_index=0,
-        styles={
-            "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": "#4dabf7", "font-size": "16px"}, 
-            "nav-link": {"font-size": "14px", "text-align": "left", "margin": "2px", "--hover-color": "#2b303b"},
-            "nav-link-selected": {"background-color": "#1c7ed6"},
-        }
+    tasa_api = obtener_tasa_bcv_api()
+    tasa_bcv = st.number_input(
+        "💵 Tasa Oficial BCV (Bs/$)",
+        min_value=1.0,
+        value=float(tasa_api),
+        step=0.10,
+        help="Obtenida automáticamente del BCV. Modificable manualmente."
     )
+    if st.button("🔄 Actualizar Tasa", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
+
+    opciones_menu = [
+        "📦 Productos / Inventario",
+        "🛒 Registrar Venta",
+        "👥 Clientes y Créditos",
+        "💳 Abonos",
+        "🔒 Cierre de Caja",
+        "🔴 Anulación de Ventas",
+        "📊 Dashboard",
+        "🧮 Calculadora",
+        "💸 Gastos / Caja Chica",
+        "📜 Historial y Transacciones",
+        "⚙️ Gestión de Usuarios"
+    ]
+    
+    opcion_raw = st.radio("Menú Principal", opciones_menu)
+    opcion = opcion_raw.split(" ", 1)[1]
 
     st.divider()
     if st.button("🚪 Cerrar Sesión", use_container_width=True):
