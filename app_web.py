@@ -4,8 +4,12 @@ import sqlite3
 import hashlib
 from datetime import datetime
 import requests
+import hashlib
+import json
+import urllib.request
 from bs4 import BeautifulSoup
 from streamlit_option_menu import option_menu
+
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -17,19 +21,32 @@ st.set_page_config(
 # --- CONSULTA AUTOMÁTICA TASA BCV ---
 @st.cache_data(ttl=3600)  # Guarda en caché por 1 hora
 def obtener_tasa_bcv_api():
-    """Obtiene la tasa oficial del BCV desde API pública o scraping directo"""
+    """Obtiene la tasa oficial del BCV mediante API pública o fallback ligero"""
     # Intentar API 1: pyDolarVenezuela pública
     try:
-        res = requests.get("https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv", timeout=5)
-        if res.status_code == 200:
-            datos = res.json()
-            # Buscar el valor de la moneda USD
-            if "monedas" in datos and "usd" in datos["monedas"]:
-                return float(datos["monedas"]["usd"]["promedio"])
-            elif "price" in datos:
-                return float(datos["price"])
+        url = "https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            if response.status == 200:
+                datos = json.loads(response.read().decode())
+                if "monedas" in datos and "usd" in datos["monedas"]:
+                    return float(datos["monedas"]["usd"]["promedio"])
+                elif "price" in datos:
+                    return float(datos["price"])
     except Exception:
         pass
+
+    # Fallback API 2: VeDolar u otra API alternativa sin necesidad de bs4 / scraping
+    try:
+        res = requests.get("https://ve.dolarapi.com/v1/dolares/oficial", timeout=5)
+        if res.status_code == 200:
+            datos = res.json()
+            if "promedio" in datos:
+                return float(datos["promedio"])
+    except Exception:
+        pass
+
+    return 60.0  # Valor por defecto si fallan las conexiones
 
     # Fallback: Scraping directo a la página principal del BCV
     try:
