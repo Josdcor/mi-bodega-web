@@ -3,12 +3,9 @@ import pandas as pd
 import sqlite3
 import hashlib
 from datetime import datetime
-import requests
-import hashlib
 import json
 import urllib.request
-from bs4 import BeautifulSoup
-from streamlit_option_menu import option_menu
+import requests
 
 
 # --- CONFIGURACIÓN DE PÁGINA ---
